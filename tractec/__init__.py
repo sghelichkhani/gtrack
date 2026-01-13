@@ -9,8 +9,11 @@ __version__ = "0.1.0"
 
 from .model import SeafloorAgeModel
 from .config import TracerConfig
+from .hpc_integration import HPCSeafloorAgeTracker, MemoryEfficientSeafloorAgeTracker
 
 __all__ = [
     "SeafloorAgeModel",
     "TracerConfig",
+    "HPCSeafloorAgeTracker",
+    "MemoryEfficientSeafloorAgeTracker",
 ]

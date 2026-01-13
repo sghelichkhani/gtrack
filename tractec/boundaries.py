@@ -61,6 +61,7 @@ class BoundaryCache:
             # Compute both to populate caches
             _ = self.get_ridges(time)
             _ = self.get_subduction(time)
+            print(f"Done preloading boundaries for time: {time}")
 
     def get_ridges(self, time: float, as_xyz: bool = True) -> np.ndarray:
         """
