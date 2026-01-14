@@ -1,315 +1,368 @@
 """
-HPC-optimized seafloor age tracking for forward-time simulations.
+Seafloor age tracking using Lagrangian particle tracking.
 
-This module provides a stateful interface for integrating seafloor age
-calculations into HPC geodynamic simulations that run forward in time.
+This module provides the main API for computing seafloor ages
+as geological age decreases toward present (0 Ma).
 """
 
 import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Union
 from .model import SeafloorAgeModel
 from .config import TracerConfig
 from .geometry import XYZ2LatLon
+from .point_rotation import PointCloud
 
 
-class HPCSeafloorAgeTracker:
+class SeafloorAgeTracker:
     """
-    Stateful seafloor age tracker optimized for HPC forward-time simulations.
+    Seafloor age tracker using Lagrangian particle tracking.
 
-    This class maintains tracer state in memory and provides incremental updates
-    as a simulation progresses forward in time. Designed for minimal overhead
-    in HPC workflows.
+    Maintains tracer state and provides incremental evolution
+    as geological age decreases toward present (0 Ma).
 
     Key features:
     - Stateful: Maintains tracers in memory between updates
-    - Incremental: Only evolves from last state to new state
-    - Efficient: Pre-loads all boundaries, minimal I/O
-    - HPC-friendly: Returns raw arrays, no plotting overhead
+    - Incremental: Only evolves from current state to new state
+    - PointCloud output: Returns PointCloud with 'age' property
+    - Checkpointing: Save/restore state for restarts
 
-    Example Usage
-    -------------
-    >>> # Initialize at start of simulation
-    >>> tracker = HPCSeafloorAgeTracker(
+    Parameters
+    ----------
+    rotation_files : list of str
+        Paths to rotation model files (.rot).
+    topology_files : list of str
+        Paths to topology/plate boundary files (.gpmlz).
+    continental_polygons : str
+        Path to continental polygon file (.gpmlz).
+    config : TracerConfig, optional
+        Configuration parameters. If None, uses defaults.
+    preload_boundaries : bool, default=True
+        Whether to pre-load all boundaries. Set False for memory-constrained systems.
+    verbose : bool, default=True
+        Print progress information.
+
+    Examples
+    --------
+    >>> # Initialize tracker
+    >>> tracker = SeafloorAgeTracker(
     ...     rotation_files=['rotations.rot'],
     ...     topology_files=['topologies.gpmlz'],
-    ...     continental_polygons='continents.gpmlz',
-    ...     initial_time=200,
-    ...     max_time=0
+    ...     continental_polygons='continents.gpmlz'
     ... )
     >>>
-    >>> # Initialize tracers
-    >>> tracker.initialize_at_time(200)
+    >>> # Initialize tracers at ridges for 200 Ma
+    >>> tracker.initialize(starting_age=200)
     >>>
-    >>> # In simulation loop, update as needed
-    >>> age_data = tracker.update_to_time(195)  # Forward 5 Myr
-    >>> lons, lats, ages = age_data['lons'], age_data['lats'], age_data['ages']
-    >>>
-    >>> # Later in simulation
-    >>> age_data = tracker.update_to_time(180)  # Incremental update
+    >>> # Step forward (decreasing geological age toward present)
+    >>> for target_age in range(199, -1, -1):
+    ...     cloud = tracker.step_to(target_age)
+    ...     xyz = cloud.xyz
+    ...     ages = cloud.get_property('age')
     """
 
     def __init__(
         self,
-        rotation_files: list,
-        topology_files: list,
+        rotation_files: Union[str, List[str]],
+        topology_files: Union[str, List[str]],
         continental_polygons: str,
-        initial_time: float,
-        max_time: float = 0,
         config: Optional[TracerConfig] = None,
         preload_boundaries: bool = True,
         verbose: bool = True
     ):
-        """
-        Initialize the HPC seafloor age tracker.
-
-        Parameters
-        ----------
-        rotation_files : list of str
-            Paths to rotation model files
-        topology_files : list of str
-            Paths to topology files
-        continental_polygons : str
-            Path to continental polygon file
-        initial_time : float
-            Starting time for simulation (e.g., 200 Ma)
-        max_time : float, default=0
-            Maximum time to simulate to (e.g., 0 Ma for present)
-        config : TracerConfig, optional
-            Configuration parameters. If None, uses defaults.
-        preload_boundaries : bool, default=True
-            Whether to pre-load all boundaries. Set False for memory-constrained systems.
-        verbose : bool, default=True
-            Print progress information
-        """
         self.verbose = verbose
 
+        # Ensure lists
+        if isinstance(rotation_files, str):
+            rotation_files = [rotation_files]
+        if isinstance(topology_files, str):
+            topology_files = [topology_files]
+
+        self._rotation_files = rotation_files
+        self._topology_files = topology_files
+        self._continental_polygons = continental_polygons
+        self._config = config if config else TracerConfig()
+
         if self.verbose:
-            print(f"Initializing HPC Seafloor Age Tracker...")
-            print(f"  Time range: {initial_time} Ma → {max_time} Ma")
+            print("Initializing SeafloorAgeTracker...")
 
         # Initialize TracTec model
-        self.model = SeafloorAgeModel(
+        self._model = SeafloorAgeModel(
             rotation_files=rotation_files,
             topology_files=topology_files,
             continental_polygons=continental_polygons,
-            config=config if config else TracerConfig()
+            config=self._config
         )
 
-        # Pre-load boundaries if requested
-        if preload_boundaries:
-            if self.verbose:
-                print(f"  Pre-loading boundaries...")
-            self.model.preload_boundaries(range(max_time, int(initial_time) + 1))
-
-            if self.verbose:
-                memory_info = self.model._boundary_cache.get_memory_usage()
-                print(f"  Cached {memory_info['num_timesteps_cached']} timesteps")
-                print(f"  Memory: {memory_info['total_mb']:.1f} MB")
+        self._preload_boundaries = preload_boundaries
 
         # State variables
-        self.current_time = initial_time
-        self.initial_time = initial_time
-        self.max_time = max_time
-        self.current_tracers = None
+        self._current_age: Optional[float] = None
+        self._tracers: Optional[np.ndarray] = None
         self._initialized = False
 
         if self.verbose:
             print("  Initialization complete.")
 
-    def initialize_at_time(self, time: float) -> int:
+    def initialize(self, starting_age: float) -> int:
         """
-        Initialize tracers at starting time.
-
-        Call this once at the beginning of your simulation.
+        Initialize tracers at ridges for given geological age.
 
         Parameters
         ----------
-        time : float
-            Starting time (e.g., 200 Ma)
+        starting_age : float
+            Starting geological age (Ma). Tracers are placed at
+            ridge locations at this age.
 
         Returns
         -------
         int
-            Number of tracers initialized
+            Number of tracers initialized.
 
         Examples
         --------
-        >>> tracker.initialize_at_time(200)
-        Initialized with 12534 tracers
+        >>> tracker.initialize(starting_age=200)
+        Initialized with 12534 tracers at 200 Ma
         12534
         """
         if self.verbose:
-            print(f"\nInitializing tracers at {time} Ma...")
+            print(f"\nInitializing tracers at {starting_age} Ma...")
 
-        self.current_tracers = self.model._initialize_tracers(time)
-        self.current_time = time
+        # Pre-load boundaries if requested
+        if self._preload_boundaries:
+            if self.verbose:
+                print("  Pre-loading boundaries...")
+            self._model.preload_boundaries(range(0, int(starting_age) + 1))
+
+            if self.verbose:
+                memory_info = self._model._boundary_cache.get_memory_usage()
+                print(f"  Cached {memory_info['num_timesteps_cached']} timesteps")
+                print(f"  Memory: {memory_info['total_mb']:.1f} MB")
+
+        self._tracers = self._model._initialize_tracers(starting_age)
+        self._current_age = starting_age
         self._initialized = True
 
-        num_tracers = len(self.current_tracers)
+        num_tracers = len(self._tracers)
 
         if self.verbose:
-            print(f"  Initialized with {num_tracers} tracers")
+            print(f"  Initialized with {num_tracers} tracers at {starting_age} Ma")
 
         return num_tracers
 
-    def update_to_time(self, new_time: float) -> Dict:
+    def initialize_from_cloud(
+        self,
+        cloud: PointCloud,
+        current_age: float
+    ) -> int:
         """
-        Update seafloor ages from current time to new time.
+        Initialize from existing PointCloud.
 
-        This is the main method to call when plate configuration changes
-        in your simulation. It incrementally evolves tracers from the
-        last known state.
+        Use this to restart from a checkpoint or to provide
+        custom initial tracer positions.
 
         Parameters
         ----------
-        new_time : float
-            New simulation time in Ma
+        cloud : PointCloud
+            Point cloud with 'age' property containing material
+            age of each tracer (time since ridge formation).
+        current_age : float
+            Current geological age (Ma).
 
         Returns
         -------
-        dict
-            Dictionary with keys:
-            - 'lons': np.ndarray of longitudes
-            - 'lats': np.ndarray of latitudes
-            - 'ages': np.ndarray of seafloor ages
-            - 'xyz': np.ndarray of Cartesian coordinates (N, 3)
-            - 'count': int, number of tracers
-            - 'time': float, current time
+        int
+            Number of tracers initialized.
+
+        Raises
+        ------
+        ValueError
+            If cloud does not have 'age' property.
+
+        Examples
+        --------
+        >>> # Restart from checkpoint
+        >>> cloud, metadata = checkpoint.load('state.npz')
+        >>> tracker.initialize_from_cloud(cloud, metadata['geological_age'])
+        """
+        if 'age' not in cloud.properties:
+            raise ValueError(
+                "PointCloud must have 'age' property. "
+                "This should contain the material age of each tracer."
+            )
+
+        if self.verbose:
+            print(f"\nInitializing from PointCloud at {current_age} Ma...")
+
+        # Pre-load boundaries if requested
+        if self._preload_boundaries:
+            if self.verbose:
+                print("  Pre-loading boundaries...")
+            self._model.preload_boundaries(range(0, int(current_age) + 1))
+
+        # Convert PointCloud to internal tracer format: (x, y, z, age)
+        ages = cloud.get_property('age')
+        self._tracers = np.column_stack([cloud.xyz, ages])
+        self._current_age = current_age
+        self._initialized = True
+
+        if self.verbose:
+            print(f"  Initialized with {len(self._tracers)} tracers at {current_age} Ma")
+
+        return len(self._tracers)
+
+    def step_to(self, target_age: float) -> PointCloud:
+        """
+        Evolve tracers to target geological age.
+
+        Can only step forward (decreasing geological age toward 0).
+
+        Parameters
+        ----------
+        target_age : float
+            Target geological age (Ma). Must be less than current_age.
+
+        Returns
+        -------
+        PointCloud
+            Point cloud with 'age' property containing material ages.
 
         Raises
         ------
         RuntimeError
-            If initialize_at_time() has not been called
+            If tracker is not initialized.
+        ValueError
+            If target_age > current_age (can only go forward).
 
         Examples
         --------
-        >>> age_data = tracker.update_to_time(195)
-        >>> print(f"Ages range from {age_data['ages'].min():.1f} to {age_data['ages'].max():.1f} Ma")
+        >>> cloud = tracker.step_to(150)
+        >>> xyz = cloud.xyz
+        >>> ages = cloud.get_property('age')
         """
         if not self._initialized:
             raise RuntimeError(
-                "Must call initialize_at_time() before update_to_time()!"
+                "Must call initialize() or initialize_from_cloud() first!"
             )
 
-        if new_time == self.current_time:
-            # No update needed
+        if target_age > self._current_age:
+            raise ValueError(
+                f"Can only step forward (decreasing age). "
+                f"Current age: {self._current_age}, target: {target_age}"
+            )
+
+        if target_age == self._current_age:
             if self.verbose:
-                print(f"Already at {new_time} Ma, no update needed")
-            return self._get_current_state()
+                print(f"Already at {target_age} Ma, no update needed")
+            return self.get_current_state()
 
         if self.verbose:
-            print(f"\nUpdating ages: {self.current_time} Ma → {new_time} Ma")
+            print(f"\nEvolving: {self._current_age} Ma -> {target_age} Ma")
 
-        # Evolve tracers incrementally
-        self.current_tracers = self.model._evolve_tracers(
-            self.current_tracers,
-            from_time=self.current_time,
-            to_time=new_time
+        # Evolve tracers
+        self._tracers = self._model._evolve_tracers(
+            self._tracers,
+            from_time=self._current_age,
+            to_time=target_age
         )
 
-        self.current_time = new_time
+        self._current_age = target_age
 
         if self.verbose:
-            print(f"  Current tracer count: {len(self.current_tracers)}")
+            print(f"  Current tracer count: {len(self._tracers)}")
 
-        return self._get_current_state()
+        return self.get_current_state()
 
-    def get_current_ages(self) -> Dict:
+    def get_current_state(self) -> PointCloud:
         """
-        Get current seafloor ages without updating.
-
-        Returns current state in the same format as update_to_time().
+        Get current tracers as PointCloud without evolving.
 
         Returns
         -------
-        dict
-            Current age data
-
-        Examples
-        --------
-        >>> current = tracker.get_current_ages()
-        >>> print(f"At {current['time']} Ma: {current['count']} tracers")
+        PointCloud
+            Current tracer positions with 'age' property.
         """
-        return self._get_current_state()
+        if self._tracers is None or len(self._tracers) == 0:
+            # Return empty PointCloud
+            return PointCloud(
+                xyz=np.zeros((0, 3)),
+                properties={'age': np.array([])}
+            )
 
-    def _get_current_state(self) -> Dict:
-        """Internal method to package current state."""
-        if self.current_tracers is None or len(self.current_tracers) == 0:
-            return {
-                'lons': np.array([]),
-                'lats': np.array([]),
-                'ages': np.array([]),
-                'xyz': np.zeros((0, 3)),
-                'count': 0,
-                'time': self.current_time
-            }
+        return PointCloud(
+            xyz=self._tracers[:, :3].copy(),
+            properties={'age': self._tracers[:, 3].copy()}
+        )
 
-        # Convert to lat/lon
-        lats, lons = XYZ2LatLon(self.current_tracers[:, :3])
-        ages = self.current_tracers[:, 3]
+    @property
+    def current_age(self) -> Optional[float]:
+        """Current geological age."""
+        return self._current_age
 
-        return {
-            'lons': lons,
-            'lats': lats,
-            'ages': ages,
-            'xyz': self.current_tracers[:, :3].copy(),
-            'count': len(ages),
-            'time': self.current_time
-        }
+    @property
+    def n_tracers(self) -> int:
+        """Number of tracers."""
+        return len(self._tracers) if self._tracers is not None else 0
 
-    def save_checkpoint(self, filename: str):
+    def save_checkpoint(self, filepath: str) -> None:
         """
-        Save current tracer state to file for checkpointing.
+        Save state to checkpoint file.
 
         Parameters
         ----------
-        filename : str
-            Path to save checkpoint file (.npy format)
+        filepath : str
+            Path to save checkpoint (.npz format).
 
         Examples
         --------
-        >>> tracker.save_checkpoint('checkpoint_150Ma.npy')
+        >>> tracker.save_checkpoint('checkpoint_150Ma.npz')
         """
+        from .io_formats import PointCloudCheckpoint
+
         if not self._initialized:
             raise RuntimeError("No state to save - not initialized")
 
-        checkpoint_data = {
-            'tracers': self.current_tracers,
-            'time': self.current_time,
-            'initial_time': self.initial_time,
-            'max_time': self.max_time
-        }
-
-        np.save(filename, checkpoint_data, allow_pickle=True)
+        cloud = self.get_current_state()
+        checkpoint = PointCloudCheckpoint()
+        checkpoint.save(
+            cloud,
+            filepath,
+            geological_age=self._current_age,
+            metadata={
+                'time_step': self._config.time_step,
+            }
+        )
 
         if self.verbose:
-            print(f"Saved checkpoint to {filename} ({self.current_time} Ma)")
+            print(f"Saved checkpoint to {filepath} ({self._current_age} Ma)")
 
-    def load_checkpoint(self, filename: str):
+    def load_checkpoint(self, filepath: str) -> None:
         """
-        Load tracer state from checkpoint file.
+        Load state from checkpoint file.
 
         Parameters
         ----------
-        filename : str
-            Path to checkpoint file
+        filepath : str
+            Path to checkpoint file.
 
         Examples
         --------
-        >>> tracker.load_checkpoint('checkpoint_150Ma.npy')
+        >>> tracker.load_checkpoint('checkpoint_150Ma.npz')
         """
-        checkpoint_data = np.load(filename, allow_pickle=True).item()
+        from .io_formats import PointCloudCheckpoint
 
-        self.current_tracers = checkpoint_data['tracers']
-        self.current_time = checkpoint_data['time']
-        self.initial_time = checkpoint_data['initial_time']
-        self.max_time = checkpoint_data['max_time']
-        self._initialized = True
+        checkpoint = PointCloudCheckpoint()
+        cloud, metadata = checkpoint.load(filepath)
+
+        geological_age = metadata.get('geological_age')
+        if geological_age is None:
+            raise ValueError("Checkpoint missing 'geological_age' in metadata")
+
+        self.initialize_from_cloud(cloud, geological_age)
 
         if self.verbose:
-            print(f"Loaded checkpoint from {filename}")
-            print(f"  Time: {self.current_time} Ma")
-            print(f"  Tracers: {len(self.current_tracers)}")
+            print(f"Loaded checkpoint from {filepath}")
+            print(f"  Geological age: {self._current_age} Ma")
+            print(f"  Tracers: {len(self._tracers)}")
 
     def get_statistics(self) -> Dict:
         """
@@ -320,87 +373,90 @@ class HPCSeafloorAgeTracker:
         dict
             Statistics including mean age, max age, coverage, etc.
         """
-        if not self._initialized or len(self.current_tracers) == 0:
+        if not self._initialized or len(self._tracers) == 0:
             return {
                 'count': 0,
                 'mean_age': 0,
                 'max_age': 0,
                 'min_age': 0,
-                'time': self.current_time
+                'geological_age': self._current_age
             }
 
-        ages = self.current_tracers[:, 3]
+        ages = self._tracers[:, 3]
 
         return {
             'count': len(ages),
-            'mean_age': np.mean(ages),
-            'max_age': np.max(ages),
-            'min_age': np.min(ages),
-            'std_age': np.std(ages),
-            'time': self.current_time
+            'mean_age': float(np.mean(ages)),
+            'max_age': float(np.max(ages)),
+            'min_age': float(np.min(ages)),
+            'std_age': float(np.std(ages)),
+            'geological_age': self._current_age
         }
 
-
-class MemoryEfficientSeafloorAgeTracker:
-    """
-    Memory-efficient variant that computes ages on-demand.
-
-    This class does not maintain state between calls. Use when memory
-    is constrained or updates are infrequent.
-
-    Example Usage
-    -------------
-    >>> tracker = MemoryEfficientSeafloorAgeTracker(...)
-    >>>
-    >>> # Compute ages on demand (no state)
-    >>> age_data = tracker.get_ages_at_time(time=100, start_time=200)
-    """
-
-    def __init__(
-        self,
-        rotation_files: list,
-        topology_files: list,
+    @classmethod
+    def compute_ages(
+        cls,
+        target_age: float,
+        starting_age: float,
+        rotation_files: Union[str, List[str]],
+        topology_files: Union[str, List[str]],
         continental_polygons: str,
-        config: Optional[TracerConfig] = None
-    ):
-        """Initialize memory-efficient tracker."""
-        self.model = SeafloorAgeModel(
-            rotation_files=rotation_files,
-            topology_files=topology_files,
-            continental_polygons=continental_polygons,
-            config=config if config else TracerConfig()
-        )
-
-    def get_ages_at_time(
-        self,
-        time: float,
-        start_time: float
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        config: Optional[TracerConfig] = None,
+        verbose: bool = True
+    ) -> PointCloud:
         """
-        Compute ages at specific time without maintaining state.
+        One-shot computation of seafloor ages (functional interface).
+
+        Creates a tracker, initializes at starting_age, and evolves
+        to target_age in a single call. Use this when you don't need
+        incremental updates.
 
         Parameters
         ----------
-        time : float
-            Target time
-        start_time : float
-            Starting time for computation
+        target_age : float
+            Target geological age (Ma).
+        starting_age : float
+            Starting geological age (Ma).
+        rotation_files : list of str
+            Paths to rotation model files (.rot).
+        topology_files : list of str
+            Paths to topology/plate boundary files (.gpmlz).
+        continental_polygons : str
+            Path to continental polygon file (.gpmlz).
+        config : TracerConfig, optional
+            Configuration parameters.
+        verbose : bool, default=True
+            Print progress information.
 
         Returns
         -------
-        lons : np.ndarray
-            Longitudes
-        lats : np.ndarray
-            Latitudes
-        ages : np.ndarray
-            Seafloor ages
+        PointCloud
+            Point cloud with 'age' property.
+
+        Examples
+        --------
+        >>> cloud = SeafloorAgeTracker.compute_ages(
+        ...     target_age=100,
+        ...     starting_age=200,
+        ...     rotation_files=['rotations.rot'],
+        ...     topology_files=['topologies.gpmlz'],
+        ...     continental_polygons='continents.gpmlz'
+        ... )
+        >>> ages = cloud.get_property('age')
         """
-        tracers = self.model.get_tracers_at_time(
-            time=time,
-            start_time=start_time
+        tracker = cls(
+            rotation_files=rotation_files,
+            topology_files=topology_files,
+            continental_polygons=continental_polygons,
+            config=config,
+            preload_boundaries=True,
+            verbose=verbose
         )
 
-        lats, lons = XYZ2LatLon(tracers[:, :3])
-        ages = tracers[:, 3]
+        tracker.initialize(starting_age)
+        return tracker.step_to(target_age)
 
-        return lons, lats, ages
+
+# Backwards compatibility aliases (deprecated)
+HPCSeafloorAgeTracker = SeafloorAgeTracker
+MemoryEfficientSeafloorAgeTracker = SeafloorAgeTracker

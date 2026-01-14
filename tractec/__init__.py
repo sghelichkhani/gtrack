@@ -11,9 +11,8 @@ This package provides tools for:
 __version__ = "0.1.0"
 
 # Core seafloor age functionality
-from .model import SeafloorAgeModel
 from .config import TracerConfig
-from .hpc_integration import HPCSeafloorAgeTracker, MemoryEfficientSeafloorAgeTracker
+from .hpc_integration import SeafloorAgeTracker
 
 # Point rotation API
 from .point_rotation import PointCloud, PointRotator
@@ -30,10 +29,8 @@ from .io_formats import (
 
 __all__ = [
     # Seafloor age
-    "SeafloorAgeModel",
+    "SeafloorAgeTracker",
     "TracerConfig",
-    "HPCSeafloorAgeTracker",
-    "MemoryEfficientSeafloorAgeTracker",
     # Point rotation
     "PointCloud",
     "PointRotator",
