@@ -1,5 +1,5 @@
 """
-Regression tests for SeafloorAgeTracker.
+Regression tests for SeafloorAgeTracker and PointRotator.
 
 These tests ensure the scientific output remains consistent across code changes.
 Reference data is stored in tests/data/ as npz files.
@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 
-from tractec import SeafloorAgeTracker, TracerConfig
+from tractec import SeafloorAgeTracker, TracerConfig, PointCloud, PointRotator
 
 # Data paths
 DATA_DIR = Path(__file__).parent.parent / "data" / "Plate_model"
@@ -25,6 +25,7 @@ TOPOLOGY_FILES = [
     DATA_DIR / "TopologyBuildingBlocks_Matthews++.gpml",
 ]
 CONTINENTAL_POLYGONS = DATA_DIR / "ContPolys/PresentDay_ContinentalPolygons_Matthews++.shp"
+STATIC_POLYGONS = DATA_DIR / "StaticPolys/PresentDay_StaticPlatePolygons_Matthews++.shp"
 
 
 def _data_files_exist():
@@ -94,5 +95,118 @@ def test_tracker_200_to_180_regression():
                                    err_msg=f"Ages mismatch at {age} Ma")
 
 
+# =============================================================================
+# Point Rotation Regression Test
+# =============================================================================
+
+ROTATION_SEED = 42  # Fixed seed for reproducible random points
+
+
+def _static_polygons_exist():
+    """Check if static polygon files exist."""
+    return STATIC_POLYGONS.exists() and _data_files_exist()
+
+
+def _run_point_rotation_to_200():
+    """
+    Create seeded random points, assign plate IDs, and rotate to 200 Ma.
+
+    Uses a fixed seed so random points are always the same.
+    """
+    # Set seed for reproducibility
+    rng = np.random.default_rng(ROTATION_SEED)
+
+    # Generate random lat/lon points (500 points for reasonable test coverage)
+    n_points = 500
+    lats = rng.uniform(-80, 80, n_points)  # Avoid poles for stability
+    lons = rng.uniform(-180, 180, n_points)
+    latlon = np.column_stack([lats, lons])
+
+    # Create PointCloud
+    cloud = PointCloud.from_latlon(latlon)
+
+    # Add a test property (seeded random values)
+    test_property = rng.uniform(0, 100, n_points)
+    cloud.add_property('test_value', test_property)
+
+    # Create rotator
+    rotator = PointRotator(
+        rotation_files=[str(f) for f in ROTATION_FILES],
+        static_polygons=str(STATIC_POLYGONS)
+    )
+
+    # Assign plate IDs at present day (keep points without valid plate IDs for consistency)
+    cloud_with_ids = rotator.assign_plate_ids(cloud, at_age=0.0, remove_undefined=False)
+
+    # Filter to only points with valid plate IDs (non-zero)
+    valid_mask = cloud_with_ids.plate_ids != 0
+    cloud_valid = cloud_with_ids.subset(valid_mask)
+
+    # Rotate to 200 Ma
+    rotated = rotator.rotate(cloud_valid, from_age=0.0, to_age=200.0)
+
+    return {
+        'xyz': rotated.xyz,
+        'plate_ids': rotated.plate_ids,
+        'test_value': rotated.get_property('test_value'),
+        'n_valid_points': len(rotated),
+    }
+
+
+def generate_rotation_reference_data():
+    """Generate and save rotation reference data. Run manually when needed."""
+    REF_DIR.mkdir(parents=True, exist_ok=True)
+    results = _run_point_rotation_to_200()
+
+    np.savez(
+        REF_DIR / "ref_rotation_200ma.npz",
+        xyz=results['xyz'],
+        plate_ids=results['plate_ids'],
+        test_value=results['test_value'],
+        n_valid_points=results['n_valid_points']
+    )
+
+    print(f"Saved rotation reference data to {REF_DIR / 'ref_rotation_200ma.npz'}")
+    print(f"  Points with valid plate IDs: {results['n_valid_points']}")
+
+
+@pytest.mark.skipif(not _static_polygons_exist(), reason="Static polygon files not found")
+def test_point_rotation_to_200_regression():
+    """Test that point rotation output matches reference data."""
+    ref_file = REF_DIR / "ref_rotation_200ma.npz"
+    if not ref_file.exists():
+        pytest.skip("Rotation reference data not found. Run generate_rotation_reference_data() first.")
+
+    results = _run_point_rotation_to_200()
+    ref = np.load(ref_file)
+
+    # Check number of valid points is the same
+    assert results['n_valid_points'] == int(ref['n_valid_points']), \
+        f"Number of valid points changed: {results['n_valid_points']} vs {int(ref['n_valid_points'])}"
+
+    # Check XYZ positions match
+    np.testing.assert_allclose(
+        results['xyz'], ref['xyz'], rtol=1e-10,
+        err_msg="XYZ positions mismatch after rotation to 200 Ma"
+    )
+
+    # Check plate IDs match
+    np.testing.assert_array_equal(
+        results['plate_ids'], ref['plate_ids'],
+        err_msg="Plate IDs mismatch"
+    )
+
+    # Check properties are preserved
+    np.testing.assert_allclose(
+        results['test_value'], ref['test_value'], rtol=1e-10,
+        err_msg="Property values changed during rotation"
+    )
+
+
 if __name__ == "__main__":
-    generate_reference_data()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "rotation":
+        generate_rotation_reference_data()
+    else:
+        generate_reference_data()
+        generate_rotation_reference_data()

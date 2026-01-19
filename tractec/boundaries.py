@@ -10,7 +10,8 @@ import numpy as np
 import pygplates
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
-from gplately import ptt
+
+from .spatial import find_polygons
 
 
 class ResolvedTopologyCache:
@@ -202,8 +203,8 @@ class ContinentalPolygonCache:
         # Create all points in single C++ call using MultiPointOnSphere
         points = pygplates.MultiPointOnSphere(zip(lats, lons)).get_points()
 
-        # Use vectorized point-in-polygon with spatial tree (C++ backend)
-        containing_polygons = ptt.utils.points_in_polygons.find_polygons(
+        # Use vectorized point-in-polygon with spatial tree
+        containing_polygons = find_polygons(
             points, polygons, all_polygons=False
         )
 

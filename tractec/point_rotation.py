@@ -14,10 +14,11 @@ Terminology:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 import warnings
 
 import numpy as np
+import pygplates
 
 
 @dataclass
@@ -261,6 +262,180 @@ class PointCloud:
         )
 
 
+# =============================================================================
+# Helper functions for plate operations
+# =============================================================================
+
+
+def _get_plate_ids(
+    xyz: np.ndarray,
+    partitioning_features,
+    rotation_model: pygplates.RotationModel,
+    time: float
+) -> np.ndarray:
+    """
+    Assign plate IDs to points based on their positions.
+
+    Uses pygplates.partition_into_plates for efficient bulk plate ID assignment.
+
+    Parameters
+    ----------
+    xyz : np.ndarray
+        Cartesian coordinates, shape (N, 3).
+    partitioning_features : pygplates.FeatureCollection
+        Static polygons or topology features for partitioning.
+    rotation_model : pygplates.RotationModel
+        Rotation model.
+    time : float
+        Reconstruction time in Ma.
+
+    Returns
+    -------
+    plate_ids : np.ndarray
+        Array of plate IDs, shape (N,). Unassigned points get plate_id=0.
+    """
+    from .geometry import XYZ2LatLon
+
+    # Convert XYZ to lat/lon
+    lats, lons = XYZ2LatLon(xyz)
+
+    # Create point features for partitioning
+    point_features = []
+    for lat, lon in zip(lats, lons):
+        point_feature = pygplates.Feature()
+        point_feature.set_geometry(pygplates.PointOnSphere(lat, lon))
+        point_features.append(point_feature)
+
+    # Partition into plates
+    assigned_point_features = pygplates.partition_into_plates(
+        partitioning_features,
+        rotation_model,
+        point_features,
+        reconstruction_time=time,
+        properties_to_copy=[pygplates.PartitionProperty.reconstruction_plate_id]
+    )
+
+    # Extract plate IDs
+    plate_ids = np.array([
+        f.get_reconstruction_plate_id() for f in assigned_point_features
+    ], dtype=int)
+
+    return plate_ids
+
+
+def _rotate_points_batch(
+    lats: np.ndarray,
+    lons: np.ndarray,
+    rotation: pygplates.FiniteRotation
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Apply rotation to a batch of points using MultiPointOnSphere.
+
+    Parameters
+    ----------
+    lats : np.ndarray
+        Latitudes in degrees, shape (N,).
+    lons : np.ndarray
+        Longitudes in degrees, shape (N,).
+    rotation : pygplates.FiniteRotation
+        Rotation to apply.
+
+    Returns
+    -------
+    rotated_lats : np.ndarray
+        Rotated latitudes, shape (N,).
+    rotated_lons : np.ndarray
+        Rotated longitudes, shape (N,).
+    """
+    if len(lats) == 0:
+        return np.array([]), np.array([])
+
+    # Create MultiPointOnSphere for batch rotation (single C++ call)
+    multi_point = pygplates.MultiPointOnSphere(zip(lats, lons))
+
+    # Apply rotation (single C++ operation)
+    rotated_multi_point = rotation * multi_point
+
+    # Extract rotated coordinates
+    rotated_lats = np.empty(len(lats))
+    rotated_lons = np.empty(len(lats))
+    for i, point in enumerate(rotated_multi_point.get_points()):
+        rotated_lats[i], rotated_lons[i] = point.to_lat_lon()
+
+    return rotated_lats, rotated_lons
+
+
+def _move_points_batched(
+    xyz: np.ndarray,
+    rotation_model: pygplates.RotationModel,
+    plate_ids: np.ndarray,
+    from_age: float,
+    to_age: float
+) -> np.ndarray:
+    """
+    Move points according to plate motions using batched rotation operations.
+
+    This provides significant speedup by grouping points by plate_id and
+    computing rotation once per plate instead of per point.
+
+    Parameters
+    ----------
+    xyz : np.ndarray
+        Cartesian coordinates, shape (N, 3).
+    rotation_model : pygplates.RotationModel
+        Rotation model.
+    plate_ids : np.ndarray
+        Plate IDs for each point, shape (N,).
+    from_age : float
+        Source time in Ma.
+    to_age : float
+        Target time in Ma.
+
+    Returns
+    -------
+    new_xyz : np.ndarray
+        Updated positions, shape (N, 3).
+    """
+    from .geometry import XYZ2LatLon, LatLon2XYZ
+
+    # Convert all positions to lat/lon once
+    lats, lons = XYZ2LatLon(xyz)
+
+    # Pre-allocate output arrays
+    new_lats = lats.copy()
+    new_lons = lons.copy()
+
+    # Group points by unique plate IDs
+    unique_plates = np.unique(plate_ids)
+
+    # Process each plate's points in batch
+    for plate_id in unique_plates:
+        # Get rotation for this plate (computed ONCE per plate)
+        rotation = rotation_model.get_rotation(to_age, plate_id, from_age)
+
+        # Find all points on this plate
+        mask = (plate_ids == plate_id)
+
+        # Get positions for this plate's points
+        plate_lats = lats[mask]
+        plate_lons = lons[mask]
+
+        # Apply rotation to all points on this plate
+        rotated_lats, rotated_lons = _rotate_points_batch(
+            plate_lats, plate_lons, rotation
+        )
+
+        # Update positions
+        new_lats[mask] = rotated_lats
+        new_lons[mask] = rotated_lons
+
+    # Convert back to XYZ
+    new_latlon = np.column_stack([new_lats, new_lons])
+    new_xyz = LatLon2XYZ(new_latlon)
+
+    return new_xyz
+
+
 class PointRotator:
     """
     Rotate points between geological ages using plate reconstructions.
@@ -378,12 +553,6 @@ class PointRotator:
         UserWarning
             If any points have undefined plate IDs.
         """
-        from .plate_operations import get_plate_ids
-
-        # Create tracer-like array for compatibility with existing function
-        tracers = np.zeros((cloud.n_points, 4))
-        tracers[:, :3] = cloud.xyz
-
         # Select partitioning features
         partitioning_features = (
             self.static_polygons
@@ -391,8 +560,8 @@ class PointRotator:
             else self.topology_features
         )
 
-        plate_ids = get_plate_ids(
-            tracers,
+        plate_ids = _get_plate_ids(
+            cloud.xyz,
             partitioning_features,
             self.rotation_model,
             at_age
@@ -472,27 +641,18 @@ class PointRotator:
                 "Call assign_plate_ids() first."
             )
 
-        from .plate_operations import move_tracers_batched
-
-        # Create tracer array for compatibility with existing function
-        tracers = np.zeros((cloud.n_points, 4))
-        tracers[:, :3] = cloud.xyz
-
-        # Compute time step (to_age - from_age)
-        dt = to_age - from_age
-
-        # Apply batched rotation (the CRITICAL OPTIMIZATION)
-        rotated_tracers = move_tracers_batched(
-            tracers,
+        # Apply batched rotation (groups by plate_id for efficiency)
+        rotated_xyz = _move_points_batched(
+            cloud.xyz,
             self.rotation_model,
             cloud.plate_ids,
-            dt,
-            from_age
+            from_age,
+            to_age
         )
 
         # Create result cloud with rotated positions
         result = PointCloud(
-            xyz=rotated_tracers[:, :3],
+            xyz=rotated_xyz,
             properties={k: v.copy() for k, v in cloud.properties.items()},
             plate_ids=cloud.plate_ids.copy()
         )

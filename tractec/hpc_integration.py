@@ -16,6 +16,9 @@ from .mesh import create_icosahedral_mesh, create_icosahedral_mesh_latlon
 from .mor_seeds import generate_mor_seeds
 from .boundaries import ContinentalPolygonCache
 from .initial_conditions import compute_initial_ages, default_age_distance_law
+from .logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class SeafloorAgeTracker:
@@ -44,7 +47,8 @@ class SeafloorAgeTracker:
     config : TracerConfig, optional
         Configuration parameters. If None, uses defaults.
     verbose : bool, default=True
-        Print progress information.
+        Deprecated. Use TRACTEC_LOGLEVEL environment variable instead.
+        Set TRACTEC_LOGLEVEL=INFO for progress messages or DEBUG for details.
 
     Examples
     --------
@@ -73,8 +77,12 @@ class SeafloorAgeTracker:
         config: Optional[TracerConfig] = None,
         verbose: bool = True,
     ):
-        self.verbose = verbose
         self._config = config if config else TracerConfig()
+
+        # Handle deprecated verbose flag
+        if verbose:
+            from .logging import enable_verbose
+            enable_verbose()
 
         # Ensure lists
         if isinstance(rotation_files, str):
@@ -86,8 +94,7 @@ class SeafloorAgeTracker:
         self._topology_files = topology_files
         self._continental_polygons_path = continental_polygons
 
-        if self.verbose:
-            print("Initializing SeafloorAgeTracker...")
+        logger.info("Initializing SeafloorAgeTracker...")
 
         # Load rotation model
         self._rotation_model = pygplates.RotationModel(rotation_files)
@@ -119,8 +126,7 @@ class SeafloorAgeTracker:
         self._ages: Optional[np.ndarray] = None  # Material ages (time since formation)
         self._initialized = False
 
-        if self.verbose:
-            print("  Initialization complete.")
+        logger.info("  Initialization complete.")
 
     def initialize(
         self,
@@ -173,8 +179,7 @@ class SeafloorAgeTracker:
         if initial_ocean_mean_spreading_rate is None:
             initial_ocean_mean_spreading_rate = self._config.initial_ocean_mean_spreading_rate
 
-        if self.verbose:
-            print(f"\nInitializing tracers at {starting_age} Ma (method='{method}')...")
+        logger.info(f"Initializing tracers at {starting_age} Ma (method='{method}')...")
 
         if method == 'icosahedral':
             self._initialize_icosahedral(
@@ -191,8 +196,7 @@ class SeafloorAgeTracker:
         self._current_age = starting_age
         self._initialized = True
 
-        if self.verbose:
-            print(f"  Initialized with {len(self._lats)} tracers at {starting_age} Ma")
+        logger.info(f"  Initialized with {len(self._lats)} tracers at {starting_age} Ma")
 
         return len(self._lats)
 
@@ -204,14 +208,12 @@ class SeafloorAgeTracker:
         age_distance_law: Optional[Callable],
     ):
         """Initialize with icosahedral mesh (GPlately-compatible)."""
-        if self.verbose:
-            print(f"  Creating icosahedral mesh (level {refinement_levels})...")
+        logger.debug(f"  Creating icosahedral mesh (level {refinement_levels})...")
 
         # Create icosahedral mesh and get lat/lon coordinates directly
         mesh_lats, mesh_lons = create_icosahedral_mesh_latlon(refinement_levels)
 
-        if self.verbose:
-            print(f"  Created mesh with {len(mesh_lats)} points")
+        logger.debug(f"  Created mesh with {len(mesh_lats)} points")
 
         # Resolve topologies at starting time (needed for compute_initial_ages)
         resolved_topologies = []
@@ -236,8 +238,7 @@ class SeafloorAgeTracker:
             ocean_lats = mesh_lats[ocean_mask]
             ocean_lons = mesh_lons[ocean_mask]
 
-            if self.verbose:
-                print(f"  Filtered to {len(ocean_lats)} ocean points (removed {continental_mask.sum()} continental)")
+            logger.debug(f"  Filtered to {len(ocean_lats)} ocean points (removed {continental_mask.sum()} continental)")
 
             # Create ocean point MultiPointOnSphere for compute_initial_ages
             ocean_points = pygplates.MultiPointOnSphere(zip(ocean_lats, ocean_lons))
@@ -247,8 +248,7 @@ class SeafloorAgeTracker:
             ocean_points = pygplates.MultiPointOnSphere(zip(ocean_lats, ocean_lons))
 
         # Compute initial ages from distance to ridge (plate-based approach)
-        if self.verbose:
-            print("  Computing initial ages from distance to ridge...")
+        logger.debug("  Computing initial ages from distance to ridge...")
 
         lons, lats, ages = compute_initial_ages(
             ocean_points,
@@ -264,8 +264,7 @@ class SeafloorAgeTracker:
 
     def _initialize_ridge_only(self, starting_age: float):
         """Initialize with tracers only at ridges (legacy TracTec approach)."""
-        if self.verbose:
-            print("  Generating ridge seed points...")
+        logger.debug("  Generating ridge seed points...")
 
         lats, lons = generate_mor_seeds(
             starting_age,
@@ -314,8 +313,7 @@ class SeafloorAgeTracker:
                 "This should contain the material age of each tracer."
             )
 
-        if self.verbose:
-            print(f"\nInitializing from PointCloud at {current_age} Ma...")
+        logger.info(f"Initializing from PointCloud at {current_age} Ma...")
 
         # Convert XYZ to lat/lon
         lonlat = cloud.lonlat
@@ -325,8 +323,7 @@ class SeafloorAgeTracker:
         self._current_age = current_age
         self._initialized = True
 
-        if self.verbose:
-            print(f"  Initialized with {len(self._lats)} tracers at {current_age} Ma")
+        logger.info(f"  Initialized with {len(self._lats)} tracers at {current_age} Ma")
 
         return len(self._lats)
 
@@ -365,12 +362,10 @@ class SeafloorAgeTracker:
             )
 
         if target_age == self._current_age:
-            if self.verbose:
-                print(f"Already at {target_age} Ma, no update needed")
+            logger.debug(f"Already at {target_age} Ma, no update needed")
             return self.get_current_state()
 
-        if self.verbose:
-            print(f"\nEvolving: {self._current_age} Ma -> {target_age} Ma")
+        logger.info(f"Evolving: {self._current_age} Ma -> {target_age} Ma")
 
         # Process in time_step increments
         time = self._current_age
@@ -378,8 +373,7 @@ class SeafloorAgeTracker:
             next_time = max(time - self._config.time_step, target_age)
 
             if len(self._lats) == 0:
-                if self.verbose:
-                    print("  Warning: No points to reconstruct")
+                logger.warning("  No points to reconstruct")
                 break
 
             # Create MultiPointOnSphere from lat/lon tuples (faster than individual PointOnSphere)
@@ -420,8 +414,7 @@ class SeafloorAgeTracker:
 
         self._current_age = target_age
 
-        if self.verbose:
-            print(f"  Current tracer count: {len(self._lats)}")
+        logger.info(f"  Current tracer count: {len(self._lats)}")
 
         return self.get_current_state()
 
@@ -472,8 +465,7 @@ class SeafloorAgeTracker:
             self._lons = self._lons[ocean_mask]
             self._ages = self._ages[ocean_mask]
 
-            if self.verbose:
-                print(f"    Removed {continental_mask.sum()} continental points")
+            logger.debug(f"    Removed {continental_mask.sum()} continental points")
 
     def _add_mor_seeds(self, time: float):
         """Add new MOR seed points."""
@@ -490,8 +482,7 @@ class SeafloorAgeTracker:
             self._lons = np.concatenate([self._lons, new_lons])
             self._ages = np.concatenate([self._ages, np.zeros(len(new_lats))])
 
-            if self.verbose:
-                print(f"    Added {len(new_lats)} new MOR seed points")
+            logger.debug(f"    Added {len(new_lats)} new MOR seed points")
 
     def get_current_state(self) -> PointCloud:
         """
@@ -562,8 +553,7 @@ class SeafloorAgeTracker:
         if max_distance is None:
             max_distance = self._config.reinit_max_distance
 
-        if self.verbose:
-            print(f"\nReinitializing to icosahedral mesh (level {refinement_levels})...")
+        logger.info(f"Reinitializing to icosahedral mesh (level {refinement_levels})...")
 
         # Create new mesh
         mesh_lats, mesh_lons = create_icosahedral_mesh_latlon(refinement_levels)
@@ -624,8 +614,7 @@ class SeafloorAgeTracker:
         self._lons = mesh_lons[valid_mask]
         self._ages = new_ages[valid_mask]
 
-        if self.verbose:
-            print(f"  Reinitialized to {len(self._lats)} points")
+        logger.info(f"  Reinitialized to {len(self._lats)} points")
 
         return len(self._lats)
 
@@ -664,8 +653,7 @@ class SeafloorAgeTracker:
             }
         )
 
-        if self.verbose:
-            print(f"Saved checkpoint to {filepath} ({self._current_age} Ma)")
+        logger.info(f"Saved checkpoint to {filepath} ({self._current_age} Ma)")
 
     def load_checkpoint(self, filepath: str) -> None:
         """
@@ -687,10 +675,9 @@ class SeafloorAgeTracker:
 
         self.initialize_from_cloud(cloud, geological_age)
 
-        if self.verbose:
-            print(f"Loaded checkpoint from {filepath}")
-            print(f"  Geological age: {self._current_age} Ma")
-            print(f"  Tracers: {len(self._lats)}")
+        logger.info(f"Loaded checkpoint from {filepath}")
+        logger.info(f"  Geological age: {self._current_age} Ma")
+        logger.info(f"  Tracers: {len(self._lats)}")
 
     def get_statistics(self) -> Dict:
         """

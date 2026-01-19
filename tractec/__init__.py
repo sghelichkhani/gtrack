@@ -10,6 +10,19 @@ This package provides tools for:
 The main entry point is SeafloorAgeTracker, which provides both a stepwise
 interface and a one-shot compute_ages() method.
 
+Logging
+-------
+TracTec uses Python's logging module. Control verbosity via environment variable:
+
+    export TRACTEC_LOGLEVEL=INFO    # Progress messages
+    export TRACTEC_LOGLEVEL=DEBUG   # Detailed debug output
+    export TRACTEC_LOGLEVEL=WARNING # Quiet (default)
+
+Or programmatically:
+
+>>> from tractec import enable_verbose, enable_debug
+>>> enable_verbose()  # Show progress messages
+
 Example
 -------
 >>> from tractec import SeafloorAgeTracker, TracerConfig
@@ -34,6 +47,16 @@ Example
 """
 
 __version__ = "0.2.0"
+
+# Logging configuration (import first to configure before other modules)
+from .logging import (
+    configure_logging,
+    set_log_level,
+    enable_verbose,
+    enable_debug,
+    disable_logging,
+    get_logger,
+)
 
 # Core seafloor age functionality
 from .config import TracerConfig
@@ -79,6 +102,13 @@ __all__ = [
     # Main API
     "SeafloorAgeTracker",
     "TracerConfig",
+    # Logging
+    "configure_logging",
+    "set_log_level",
+    "enable_verbose",
+    "enable_debug",
+    "disable_logging",
+    "get_logger",
     # Point rotation
     "PointCloud",
     "PointRotator",
