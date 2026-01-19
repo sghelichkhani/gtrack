@@ -147,7 +147,7 @@ class SeafloorAgeTracker:
         method : str, default='icosahedral'
             Initialization method:
             - 'icosahedral': Full ocean mesh with computed ages (GPlately-compatible)
-            - 'ridge_only': Tracers only at ridges with age=0 (legacy TracTec)
+            - 'ridge_only': Tracers only at ridges with age=0 (legacy tractec)
         refinement_levels : int, optional
             Icosahedral mesh refinement level. If None, uses config default.
         initial_ocean_mean_spreading_rate : float, optional
@@ -263,7 +263,7 @@ class SeafloorAgeTracker:
         self._ages = ages
 
     def _initialize_ridge_only(self, starting_age: float):
-        """Initialize with tracers only at ridges (legacy TracTec approach)."""
+        """Initialize with tracers only at ridges (legacy tractec approach)."""
         logger.debug("  Generating ridge seed points...")
 
         lats, lons = generate_mor_seeds(

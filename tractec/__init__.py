@@ -1,5 +1,5 @@
 """
-TracTec: High-performance seafloor age tracking and point rotation.
+tractec: High-performance seafloor age tracking and point rotation.
 
 This package provides tools for:
 - Computing seafloor ages from plate tectonic reconstructions using Lagrangian
@@ -12,7 +12,7 @@ interface and a one-shot compute_ages() method.
 
 Logging
 -------
-TracTec uses Python's logging module. Control verbosity via environment variable:
+tractec uses Python's logging module. Control verbosity via environment variable:
 
     export TRACTEC_LOGLEVEL=INFO    # Progress messages
     export TRACTEC_LOGLEVEL=DEBUG   # Detailed debug output

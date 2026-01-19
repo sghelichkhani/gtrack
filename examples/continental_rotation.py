@@ -2,7 +2,7 @@
 # ===================================================
 #
 # This example demonstrates how to rotate user-provided points
-# through geological time using TracTec's Point Rotation API.
+# through geological time using tractec's Point Rotation API.
 # This is useful for reconstructing continental lithospheric
 # structure at past geological ages.
 #
@@ -164,7 +164,7 @@ print(f"  Longitude: {latlon_rotated[:, 1].min():.1f} to {latlon_rotated[:, 1].m
 
 # ## Save Results
 #
-# TracTec supports multiple output formats:
+# tractec supports multiple output formats:
 # - NumPy (.npz) for Python workflows
 # - GPML (.gpml) for viewing in GPlates
 

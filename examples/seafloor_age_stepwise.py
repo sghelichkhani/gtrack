@@ -1,7 +1,7 @@
-# Stepwise Seafloor Age Computation with TracTec
+# Stepwise Seafloor Age Computation with tractec
 # ================================================
 #
-# This example demonstrates how to use TracTec's SeafloorAgeTracker
+# This example demonstrates how to use tractec's SeafloorAgeTracker
 # for computing seafloor ages using Lagrangian particle tracking.
 # The stepwise interface is ideal for simulations that need to
 # access ages at multiple intermediate geological ages.
@@ -28,7 +28,7 @@ from tractec.boundaries import extract_ridge_points_latlon, extract_subduction_p
 
 # ## Data File Paths
 #
-# TracTec requires three types of GPlates data files:
+# tractec requires three types of GPlates data files:
 # - Rotation files (.rot): Define how plates move through time
 # - Topology files (.gpmlz): Define plate boundaries
 # - Continental polygons (.gpmlz): Define continental regions

@@ -1,7 +1,7 @@
 """
-Logging configuration for TracTec.
+Logging configuration for tractec.
 
-This module provides centralized logging for the TracTec package.
+This module provides centralized logging for the tractec package.
 Log level can be controlled via the TRACTEC_LOGLEVEL environment variable.
 
 Environment Variables
@@ -65,7 +65,7 @@ def configure_logging(
     stream: Optional[object] = None,
 ) -> None:
     """
-    Configure TracTec logging.
+    Configure tractec logging.
 
     This function sets up the logging configuration for the entire package.
     It is called automatically when the package is imported, but can be
@@ -115,7 +115,7 @@ def configure_logging(
 
 def get_logger(name: str) -> logging.Logger:
     """
-    Get a logger for a TracTec module.
+    Get a logger for a tractec module.
 
     Parameters
     ----------
@@ -147,7 +147,7 @@ def get_logger(name: str) -> logging.Logger:
 
 def set_log_level(level: int) -> None:
     """
-    Set the log level for all TracTec loggers.
+    Set the log level for all tractec loggers.
 
     Parameters
     ----------
@@ -186,7 +186,7 @@ def enable_debug() -> None:
 
 def disable_logging() -> None:
     """
-    Disable all TracTec logging output.
+    Disable all tractec logging output.
 
     Convenience function equivalent to set_log_level(logging.CRITICAL + 1).
     """

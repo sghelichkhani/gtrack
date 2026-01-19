@@ -1,4 +1,4 @@
-"""Configuration classes for TracTec package."""
+"""Configuration classes for tractec package."""
 
 from dataclasses import dataclass
 import numpy as np
