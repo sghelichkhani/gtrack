@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from tractec.geometry import (
+from gtrack.geometry import (
     LatLon2XYZ,
     XYZ2LatLon,
     RefineGreatCircleArcSegment,

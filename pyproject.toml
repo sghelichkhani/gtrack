@@ -3,9 +3,9 @@ requires = ["setuptools>=65", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tractec"
+name = "gtrack"
 version = "0.2.0"
-description = "High-performance seafloor age tracking and point rotation using plate tectonic reconstructions"
+description = "GPlates-based Tracking of Lithosphere and Kinematics"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -13,7 +13,7 @@ authors = [
     {name = "Krister S. Karlsen"},
     {name = "S. Ghelichkhani"},
 ]
-keywords = ["plate tectonics", "seafloor age", "geodynamics", "pygplates"]
+keywords = ["plate tectonics", "seafloor age", "geodynamics", "pygplates", "lithosphere", "kinematics"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -42,18 +42,23 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=3.0",
 ]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.24",
+]
 all = [
-    "tractec[visualization,dev]",
+    "gtrack[visualization,dev,docs]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/sghelichkhani/tractec"
-Documentation = "https://github.com/sghelichkhani/tractec#readme"
-Repository = "https://github.com/sghelichkhani/tractec"
+Homepage = "https://github.com/sghelichkhani/gtrack"
+Documentation = "https://gtrack.gadopt.org"
+Repository = "https://github.com/sghelichkhani/gtrack"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["tractec*"]
+include = ["gtrack*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

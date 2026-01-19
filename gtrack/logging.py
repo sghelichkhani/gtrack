@@ -1,26 +1,26 @@
 """
-Logging configuration for tractec.
+Logging configuration for gtrack.
 
-This module provides centralized logging for the tractec package.
-Log level can be controlled via the TRACTEC_LOGLEVEL environment variable.
+This module provides centralized logging for the gtrack package.
+Log level can be controlled via the GTRACK_LOGLEVEL environment variable.
 
 Environment Variables
 ---------------------
-TRACTEC_LOGLEVEL : str
+GTRACK_LOGLEVEL : str
     Set the logging level. Options: DEBUG, INFO, WARNING, ERROR, CRITICAL.
     Default is WARNING (minimal output).
 
 Usage
 -----
->>> from tractec.logging import get_logger
+>>> from gtrack.logging import get_logger
 >>> logger = get_logger(__name__)
 >>> logger.info("Processing started")
 >>> logger.debug("Detailed debug information")
 
-To enable verbose output, set the environment variable before importing tractec:
+To enable verbose output, set the environment variable before importing gtrack:
 
-    export TRACTEC_LOGLEVEL=INFO   # Show progress messages
-    export TRACTEC_LOGLEVEL=DEBUG  # Show detailed debug info
+    export GTRACK_LOGLEVEL=INFO   # Show progress messages
+    export GTRACK_LOGLEVEL=DEBUG  # Show detailed debug info
 """
 
 import logging
@@ -30,7 +30,7 @@ from typing import Optional
 
 
 # Package-level logger name
-LOGGER_NAME = "tractec"
+LOGGER_NAME = "gtrack"
 
 # Default log level (quiet by default)
 DEFAULT_LOG_LEVEL = "WARNING"
@@ -44,8 +44,8 @@ _logging_configured = False
 
 
 def _get_log_level_from_env() -> int:
-    """Get log level from TRACTEC_LOGLEVEL environment variable."""
-    level_name = os.environ.get("TRACTEC_LOGLEVEL", DEFAULT_LOG_LEVEL).upper()
+    """Get log level from GTRACK_LOGLEVEL environment variable."""
+    level_name = os.environ.get("GTRACK_LOGLEVEL", DEFAULT_LOG_LEVEL).upper()
 
     level_map = {
         "DEBUG": logging.DEBUG,
@@ -65,7 +65,7 @@ def configure_logging(
     stream: Optional[object] = None,
 ) -> None:
     """
-    Configure tractec logging.
+    Configure gtrack logging.
 
     This function sets up the logging configuration for the entire package.
     It is called automatically when the package is imported, but can be
@@ -75,7 +75,7 @@ def configure_logging(
     ----------
     level : int, optional
         Logging level (e.g., logging.DEBUG, logging.INFO).
-        If None, reads from TRACTEC_LOGLEVEL environment variable.
+        If None, reads from GTRACK_LOGLEVEL environment variable.
     format_string : str, optional
         Format string for log messages.
         If None, uses a simple format for INFO and above, detailed for DEBUG.
@@ -93,7 +93,7 @@ def configure_logging(
     if stream is None:
         stream = sys.stderr
 
-    # Get or create the root tractec logger
+    # Get or create the root gtrack logger
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(level)
 
@@ -115,7 +115,7 @@ def configure_logging(
 
 def get_logger(name: str) -> logging.Logger:
     """
-    Get a logger for a tractec module.
+    Get a logger for a gtrack module.
 
     Parameters
     ----------
@@ -138,7 +138,7 @@ def get_logger(name: str) -> logging.Logger:
     if not _logging_configured:
         configure_logging()
 
-    # Ensure name is under tractec namespace
+    # Ensure name is under gtrack namespace
     if not name.startswith(LOGGER_NAME):
         name = f"{LOGGER_NAME}.{name}"
 
@@ -147,7 +147,7 @@ def get_logger(name: str) -> logging.Logger:
 
 def set_log_level(level: int) -> None:
     """
-    Set the log level for all tractec loggers.
+    Set the log level for all gtrack loggers.
 
     Parameters
     ----------
@@ -157,7 +157,7 @@ def set_log_level(level: int) -> None:
     Examples
     --------
     >>> import logging
-    >>> from tractec.logging import set_log_level
+    >>> from gtrack.logging import set_log_level
     >>> set_log_level(logging.DEBUG)  # Enable debug output
     """
     logger = logging.getLogger(LOGGER_NAME)
@@ -186,7 +186,7 @@ def enable_debug() -> None:
 
 def disable_logging() -> None:
     """
-    Disable all tractec logging output.
+    Disable all gtrack logging output.
 
     Convenience function equivalent to set_log_level(logging.CRITICAL + 1).
     """

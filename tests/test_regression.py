@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 
-from tractec import SeafloorAgeTracker, TracerConfig, PointCloud, PointRotator
+from gtrack import SeafloorAgeTracker, TracerConfig, PointCloud, PointRotator
 
 # Data paths
 DATA_DIR = Path(__file__).parent.parent / "data" / "Plate_model"

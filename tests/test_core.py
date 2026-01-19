@@ -2,8 +2,8 @@
 
 import numpy as np
 import pytest
-from tractec import TracerConfig
-from tractec.geometry import LatLon2XYZ, XYZ2LatLon
+from gtrack import TracerConfig
+from gtrack.geometry import LatLon2XYZ, XYZ2LatLon
 
 
 class TestTracerConfig:
@@ -84,7 +84,7 @@ class TestMeshGeneration:
 
     def test_create_icosahedral_mesh_latlon(self):
         """Test icosahedral mesh creation returning lat/lon."""
-        from tractec.mesh import create_icosahedral_mesh_latlon
+        from gtrack.mesh import create_icosahedral_mesh_latlon
 
         lats, lons = create_icosahedral_mesh_latlon(refinement_levels=3)
 
@@ -105,7 +105,7 @@ class TestMeshGeneration:
 
     def test_create_icosahedral_mesh_xyz(self):
         """Test icosahedral mesh creation returning XYZ."""
-        from tractec.mesh import create_icosahedral_mesh_xyz
+        from gtrack.mesh import create_icosahedral_mesh_xyz
 
         xyz = create_icosahedral_mesh_xyz(refinement_levels=3)
 
@@ -118,7 +118,7 @@ class TestMeshGeneration:
 
     def test_mesh_point_count(self):
         """Test mesh point count formula provides an estimate."""
-        from tractec.mesh import mesh_point_count
+        from gtrack.mesh import mesh_point_count
 
         # The formula 10 * 4^level + 2 gives an approximate count
         # Level 0 should give exactly 12 (original icosahedron)
@@ -134,7 +134,7 @@ class TestMORSeeds:
 
     def test_get_stage_rotation_returns_none_without_plates(self):
         """Test that get_stage_rotation returns None for features without plate IDs."""
-        from tractec.mor_seeds import get_stage_rotation_for_reconstructed_geometry
+        from gtrack.mor_seeds import get_stage_rotation_for_reconstructed_geometry
         import pygplates
 
         # Create a mock feature without plate IDs
@@ -156,7 +156,7 @@ class TestInitialConditions:
 
     def test_default_age_distance_law(self):
         """Test the default age-distance formula."""
-        from tractec.initial_conditions import default_age_distance_law
+        from gtrack.initial_conditions import default_age_distance_law
 
         distances_km = np.array([75.0, 150.0, 300.0])
         spreading_rate_mm_yr = 75.0  # = 75 km/Myr
@@ -174,7 +174,7 @@ class TestBoundaries:
 
     def test_continental_polygon_cache_empty(self):
         """Test continental cache behavior with no polygons."""
-        from tractec.boundaries import ContinentalPolygonCache
+        from gtrack.boundaries import ContinentalPolygonCache
         import pygplates
 
         # Create empty feature collection

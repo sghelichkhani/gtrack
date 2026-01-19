@@ -43,7 +43,7 @@ class PointCloud:
     Examples
     --------
     >>> xyz = np.random.randn(1000, 3)
-    >>> from tractec.geometry import normalize_to_sphere
+    >>> from gtrack.geometry import normalize_to_sphere
     >>> xyz = normalize_to_sphere(xyz)  # Project to Earth's surface
     >>> cloud = PointCloud(xyz=xyz)
     >>> cloud.add_property('lithospheric_depth', np.random.rand(1000) * 100e3)

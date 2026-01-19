@@ -1,5 +1,5 @@
 """
-tractec: High-performance seafloor age tracking and point rotation.
+gtrack: High-performance seafloor age tracking and point rotation.
 
 This package provides tools for:
 - Computing seafloor ages from plate tectonic reconstructions using Lagrangian
@@ -12,20 +12,20 @@ interface and a one-shot compute_ages() method.
 
 Logging
 -------
-tractec uses Python's logging module. Control verbosity via environment variable:
+gtrack uses Python's logging module. Control verbosity via environment variable:
 
-    export TRACTEC_LOGLEVEL=INFO    # Progress messages
-    export TRACTEC_LOGLEVEL=DEBUG   # Detailed debug output
-    export TRACTEC_LOGLEVEL=WARNING # Quiet (default)
+    export GTRACK_LOGLEVEL=INFO    # Progress messages
+    export GTRACK_LOGLEVEL=DEBUG   # Detailed debug output
+    export GTRACK_LOGLEVEL=WARNING # Quiet (default)
 
 Or programmatically:
 
->>> from tractec import enable_verbose, enable_debug
+>>> from gtrack import enable_verbose, enable_debug
 >>> enable_verbose()  # Show progress messages
 
 Example
 -------
->>> from tractec import SeafloorAgeTracker, TracerConfig
+>>> from gtrack import SeafloorAgeTracker, TracerConfig
 >>>
 >>> # Simple one-shot computation
 >>> cloud = SeafloorAgeTracker.compute_ages(

@@ -54,7 +54,7 @@ jobs:
         if: matrix.python-version == '3.12'
         run: |
           pip install pytest-cov
-          python -m pytest tests/ -v --cov=tractec --cov-report=term-missing --cov-report=xml
+          python -m pytest tests/ -v --cov=gtrack --cov-report=term-missing --cov-report=xml
 
       - name: Upload coverage reports
         if: matrix.python-version == '3.12'

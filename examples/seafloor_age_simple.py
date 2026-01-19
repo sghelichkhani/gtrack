@@ -9,7 +9,7 @@
 # and don't need incremental updates.
 
 # +
-from tractec import SeafloorAgeTracker, TracerConfig
+from gtrack import SeafloorAgeTracker, TracerConfig
 import numpy as np
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs

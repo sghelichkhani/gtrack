@@ -47,8 +47,8 @@ class SeafloorAgeTracker:
     config : TracerConfig, optional
         Configuration parameters. If None, uses defaults.
     verbose : bool, default=True
-        Deprecated. Use TRACTEC_LOGLEVEL environment variable instead.
-        Set TRACTEC_LOGLEVEL=INFO for progress messages or DEBUG for details.
+        Deprecated. Use GTRACK_LOGLEVEL environment variable instead.
+        Set GTRACK_LOGLEVEL=INFO for progress messages or DEBUG for details.
 
     Examples
     --------
@@ -147,7 +147,7 @@ class SeafloorAgeTracker:
         method : str, default='icosahedral'
             Initialization method:
             - 'icosahedral': Full ocean mesh with computed ages (GPlately-compatible)
-            - 'ridge_only': Tracers only at ridges with age=0 (legacy tractec)
+            - 'ridge_only': Tracers only at ridges with age=0 (legacy gtrack)
         refinement_levels : int, optional
             Icosahedral mesh refinement level. If None, uses config default.
         initial_ocean_mean_spreading_rate : float, optional
@@ -263,7 +263,7 @@ class SeafloorAgeTracker:
         self._ages = ages
 
     def _initialize_ridge_only(self, starting_age: float):
-        """Initialize with tracers only at ridges (legacy tractec approach)."""
+        """Initialize with tracers only at ridges (legacy gtrack approach)."""
         logger.debug("  Generating ridge seed points...")
 
         lats, lons = generate_mor_seeds(

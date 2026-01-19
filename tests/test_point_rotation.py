@@ -5,16 +5,16 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from tractec.point_rotation import PointCloud, PointRotator
-from tractec.polygon_filter import PolygonFilter
-from tractec.io_formats import (
+from gtrack.point_rotation import PointCloud, PointRotator
+from gtrack.polygon_filter import PolygonFilter
+from gtrack.io_formats import (
     load_points_numpy,
     save_points_numpy,
     load_points_latlon,
     save_points_latlon,
     PointCloudCheckpoint,
 )
-from tractec.geometry import LatLon2XYZ, XYZ2LatLon, normalize_to_sphere, EARTH_RADIUS
+from gtrack.geometry import LatLon2XYZ, XYZ2LatLon, normalize_to_sphere, EARTH_RADIUS
 
 
 class TestPointCloud:

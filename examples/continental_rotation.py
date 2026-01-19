@@ -17,7 +17,7 @@
 from pathlib import Path
 import numpy as np
 
-from tractec import (
+from gtrack import (
     PointCloud,
     PointRotator,
     PolygonFilter,

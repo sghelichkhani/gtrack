@@ -22,8 +22,8 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import pygplates
 
-from tractec import SeafloorAgeTracker, TracerConfig, PointCloudCheckpoint
-from tractec.boundaries import extract_ridge_points_latlon, extract_subduction_points_latlon
+from gtrack import SeafloorAgeTracker, TracerConfig, PointCloudCheckpoint
+from gtrack.boundaries import extract_ridge_points_latlon, extract_subduction_points_latlon
 # -
 
 # ## Data File Paths
