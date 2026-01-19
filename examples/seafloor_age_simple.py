@@ -2,17 +2,18 @@
 # =========================================
 #
 # This example demonstrates the simplest way to compute seafloor
-# ages using TracTec. The compute_ages() class method provides a
+# ages using tractec. The compute_ages() class method provides a
 # functional interface that handles all setup internally.
 #
 # Use this approach when you need ages at a single geological age
 # and don't need incremental updates.
 
 # +
-from pathlib import Path
+from tractec import SeafloorAgeTracker, TracerConfig
 import numpy as np
-
-from tractec import SeafloorAgeTracker
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+from pathlib import Path
 # -
 
 # ## Data File Paths
@@ -20,18 +21,50 @@ from tractec import SeafloorAgeTracker
 # Adjust these paths to match your GPlates data installation.
 
 # +
-data_dir = Path("/Applications/GPlates_2.4.0/GeoData/FeatureCollections/")
+data_dir = Path("../") / "data/Plate_model"
 
 rotation_files = [
-    str(data_dir / "Rotations/Zahirovic_etal_2022_OptimisedMantleRef_and_NNRMantleRef.rot")
+    data_dir / "Global_EB_250-0Ma_GK07_Matthews++.rot",
+    data_dir / "Global_EB_410-250Ma_GK07_Matthews++.rot"
 ]
 
 topology_files = [
-    str(data_dir / "Topologies/Global_250-0Ma_Rotations_2022_Optimisation_v1.2_Topologies.gpmlz")
+    data_dir / "Mesozoic-Cenozoic_plate_boundaries_Matthews++.gpml",
+    data_dir / "Paleozoic_plate_boundaries_Matthews++.gpml",
+    data_dir / "TopologyBuildingBlocks_Matthews++.gpml",
 ]
 
-continental_polygons = str(
-    data_dir / "ContinentalPolygons/Global_EarthByte_GPlates_PresentDay_ContinentalPolygons.gpmlz"
+# Continental polygons are optional - if not provided, tracers are not
+# removed when entering continental regions
+continental_polygons = data_dir / \
+    "ContPolys/PresentDay_ContinentalPolygons_Matthews++.shp"
+# -
+
+# ## Configuration
+#
+# TracerConfig controls all tracer parameters. The new API uses
+# pygplates' C++ backend for efficient collision detection and
+# point advection, matching GPlately's approach.
+
+# +
+config = TracerConfig(
+    # Time stepping
+    time_step=1.0,  # Time step size (Myr)
+
+    # Mesh initialization - icosahedral mesh refinement level
+    # Level 5 = ~10,242 points, Level 6 = ~40,962 points
+    default_refinement_levels=5,
+
+    # Initial age calculation
+    initial_ocean_mean_spreading_rate=75.0,  # mm/yr (GPlately default)
+
+    # MOR seed generation
+    ridge_sampling_degrees=0.5,    # Ridge tessellation (~50 km at equator)
+    spreading_offset_degrees=0.01,  # Offset from ridge (~1 km)
+
+    # Collision detection (C++ backend - GPlately compatible)
+    velocity_delta_threshold=7.0,      # km/Myr (converted to 0.7 cm/yr)
+    distance_threshold_per_myr=10.0,   # km/Myr
 )
 # -
 
@@ -42,17 +75,17 @@ continental_polygons = str(
 # a single call. This is the simplest way to get seafloor ages.
 
 # +
-# Compute seafloor ages at 5 Ma, starting from 10 Ma
+# Compute seafloor ages at 170 Ma, starting from 200 Ma
 cloud = SeafloorAgeTracker.compute_ages(
-    target_age=5,               # Get ages at 5 Ma
-    starting_age=10,            # Start from 10 Ma
+    target_age=170,
+    starting_age=200,
     rotation_files=rotation_files,
     topology_files=topology_files,
     continental_polygons=continental_polygons,
+    config=config,
     verbose=True
 )
 # -
-
 # ## Access Results
 #
 # The result is a PointCloud with xyz coordinates and an 'age'
@@ -60,38 +93,46 @@ cloud = SeafloorAgeTracker.compute_ages(
 
 # +
 # Get coordinates and ages
-xyz = cloud.xyz                    # (N, 3) Cartesian coordinates
-ages = cloud.get_property('age')   # (N,) material ages in Myr
-
-print(f"\nResults:")
-print(f"  Number of tracers: {len(xyz)}")
-print(f"  XYZ shape: {xyz.shape}")
-print(f"  Age range: {ages.min():.1f} - {ages.max():.1f} Myr")
-print(f"  Mean age: {ages.mean():.1f} Myr")
-
-# The xyz array can be used directly with gadopt's cKDTree
-# interpolation for applying seafloor ages to your mesh
+# (N, 2) array with [lon, lat] in degrees
+xyz = cloud.xyz
+lonlat = cloud.lonlat  # (N, 2) array with [lon, lat] in degrees
+tracer_ages = cloud.get_property('age')   # (N,) material ages in Myr
 # -
 
-# ## Convert to Lat/Lon if Needed
+# ## Plotting of the results
 #
-# While Cartesian coordinates are used internally (for gadopt),
-# you can easily convert to lat/lon for visualization.
+# Plot the tracers directly as a scatter plot on a Mollweide projection.
 
 # +
-latlon = cloud.latlon  # (N, 2) array with [lat, lon] in degrees
+# Extract lon/lat from the cloud
+lons = lonlat[:, 0]
+lats = lonlat[:, 1]
 
-print(f"\nGeographic coordinates:")
-print(f"  Latitude range: {latlon[:, 0].min():.1f} to {latlon[:, 0].max():.1f}")
-print(f"  Longitude range: {latlon[:, 1].min():.1f} to {latlon[:, 1].max():.1f}")
+# Create figure with Mollweide projection
+fig = plt.figure(num=1, figsize=(12, 6))
+ax = plt.axes(projection=ccrs.Mollweide())
+
+# Plot tracers as scatter points
+scatter = ax.scatter(
+    lons, lats,
+    c=tracer_ages,
+    s=1,  # Small point size
+    cmap='viridis_r',  # Reversed: young=yellow, old=purple
+    vmin=0, vmax=30,
+    transform=ccrs.PlateCarree()
+)
+
+# Add coastlines and set global extent
+ax.coastlines(resolution='110m', linewidth=0.5)
+ax.set_global()
+
+# Add colorbar
+cbar = plt.colorbar(scatter, ax=ax, orientation='horizontal',
+                    pad=0.05, aspect=40, shrink=0.8)
+cbar.set_label('Seafloor Age (Myr)', fontsize=12)
+
+ax.set_title(f'Seafloor Tracers at 170 Ma')
+
+fig.tight_layout()
+fig.savefig('seafloor_age_simple.png', dpi=150)
 # -
-
-# ## Summary
-#
-# For simple use cases where you need seafloor ages at a single
-# geological age:
-#
-# 1. Call SeafloorAgeTracker.compute_ages() with your parameters
-# 2. Access cloud.xyz for Cartesian coordinates
-# 3. Access cloud.get_property('age') for material ages
-# 4. Pass xyz directly to gadopt's interpolation routines

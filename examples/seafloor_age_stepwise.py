@@ -18,8 +18,12 @@
 # +
 from pathlib import Path
 import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import pygplates
 
 from tractec import SeafloorAgeTracker, TracerConfig, PointCloudCheckpoint
+from tractec.boundaries import extract_ridge_points_latlon, extract_subduction_points_latlon
 # -
 
 # ## Data File Paths
@@ -33,19 +37,23 @@ from tractec import SeafloorAgeTracker, TracerConfig, PointCloudCheckpoint
 # paths to match your GPlates installation.
 
 # +
-data_dir = Path("/Applications/GPlates_2.4.0/GeoData/FeatureCollections/")
+data_dir = Path("../") / "data/Plate_model"
 
 rotation_files = [
-    str(data_dir / "Rotations/Zahirovic_etal_2022_OptimisedMantleRef_and_NNRMantleRef.rot")
+    data_dir / "Global_EB_250-0Ma_GK07_Matthews++.rot",
+    data_dir / "Global_EB_410-250Ma_GK07_Matthews++.rot"
 ]
 
 topology_files = [
-    str(data_dir / "Topologies/Global_250-0Ma_Rotations_2022_Optimisation_v1.2_Topologies.gpmlz")
+    data_dir / "Mesozoic-Cenozoic_plate_boundaries_Matthews++.gpml",
+    data_dir / "Paleozoic_plate_boundaries_Matthews++.gpml",
+    data_dir / "TopologyBuildingBlocks_Matthews++.gpml",
 ]
 
-continental_polygons = str(
-    data_dir / "ContinentalPolygons/Global_EarthByte_GPlates_PresentDay_ContinentalPolygons.gpmlz"
-)
+# Continental polygons are optional - if not provided, tracers are not
+# removed when entering continental regions
+continental_polygons = data_dir / \
+    "ContPolys/PresentDay_ContinentalPolygons_Matthews++.shp"
 
 output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
@@ -53,15 +61,31 @@ output_dir.mkdir(exist_ok=True)
 
 # ## Configuration
 #
-# TracerConfig controls the simulation parameters. The time_step
-# determines how finely we resolve the evolution. Smaller time
-# steps give more accurate results but take longer.
+# TracerConfig controls the simulation parameters. The new API uses
+# pygplates' C++ backend for efficient point advection and collision
+# detection, matching GPlately's approach.
 
+# +
 config = TracerConfig(
-    time_step=1.0,              # 1 Myr time step
-    ridge_resolution=50e3,      # 50 km ridge sampling
-    subduction_resolution=20e3  # 20 km subduction zone sampling
+    # Time stepping
+    time_step=1.0,  # Time step size (Myr)
+
+    # Mesh initialization - icosahedral mesh refinement level
+    # Level 5 = ~10,242 points, Level 6 = ~40,962 points
+    default_refinement_levels=5,
+
+    # Initial age calculation
+    initial_ocean_mean_spreading_rate=75.0,  # mm/yr (GPlately default)
+
+    # MOR seed generation
+    ridge_sampling_degrees=2.0,    # Ridge tessellation (~50 km at equator)
+    spreading_offset_degrees=0.01,  # Offset from ridge (~1 km)
+
+    # Collision detection (C++ backend - GPlately compatible)
+    velocity_delta_threshold=7.0,      # km/Myr (converted to 0.7 cm/yr)
+    distance_threshold_per_myr=10.0,   # km/Myr
 )
+# -
 
 # ## Initialize the Tracker
 #
@@ -75,14 +99,19 @@ tracker = SeafloorAgeTracker(
     topology_files=topology_files,
     continental_polygons=continental_polygons,
     config=config,
-    preload_boundaries=True,  # Pre-load for better performance
     verbose=True
 )
 
 # Initialize tracers at ridges for starting age
-starting_age = 10  # 10 Ma - small for demo purposes
+starting_age = 200  # Ma
 n_tracers = tracker.initialize(starting_age=starting_age)
 print(f"Initialized {n_tracers} tracers at {starting_age} Ma")
+
+# Load rotation model and topology features for boundary visualization
+rotation_model = pygplates.RotationModel([str(f) for f in rotation_files])
+topology_features = pygplates.FeatureCollection()
+for f in topology_files:
+    topology_features.add(pygplates.FeatureCollection(str(f)))
 # -
 
 # ## Stepwise Evolution
@@ -92,13 +121,37 @@ print(f"Initialized {n_tracers} tracers at {starting_age} Ma")
 # material age (time since formation at ridge) of each tracer.
 
 # +
-# Step through time in 2 Myr increments
-for target_age in range(starting_age - 2, -1, -2):
+# Step through time in 5 Myr increments
+for target_age in range(starting_age - 5, -1, -5):
+    # Get "before" tracer positions (current state before stepping)
+    before_cloud = tracker.get_current_state()
+    before_lonlat = before_cloud.lonlat
+    before_ages = before_cloud.get_property('age')
+    current_age = tracker.current_age
+
+    # Get ridge and subduction points for visualization (BEFORE)
+    ridge_lats, ridge_lons = extract_ridge_points_latlon(
+        current_age, topology_features, rotation_model, tessellate_degrees=1.0
+    )
+    sub_lats, sub_lons = extract_subduction_points_latlon(
+        current_age, topology_features, rotation_model, tessellate_degrees=1.0
+    )
+
+    # Step to target age
     cloud = tracker.step_to(target_age)
 
     # Access data for gadopt integration
     xyz = cloud.xyz                    # (N, 3) Cartesian coordinates
     ages = cloud.get_property('age')   # (N,) material ages
+    lonlat = cloud.lonlat              # (N, 2) lon/lat coordinates
+
+    # Get ridge and subduction points after step
+    ridge_lats_after, ridge_lons_after = extract_ridge_points_latlon(
+        target_age, topology_features, rotation_model, tessellate_degrees=1.0
+    )
+    sub_lats_after, sub_lons_after = extract_subduction_points_latlon(
+        target_age, topology_features, rotation_model, tessellate_degrees=1.0
+    )
 
     # Print statistics
     stats = tracker.get_statistics()
@@ -106,6 +159,83 @@ for target_age in range(starting_age - 2, -1, -2):
     print(f"  Tracers: {stats['count']}")
     print(f"  Age range: {stats['min_age']:.1f} - {stats['max_age']:.1f} Myr")
     print(f"  Mean age: {stats['mean_age']:.1f} Myr")
+
+    # Plot tracers with boundaries - BEFORE and AFTER
+    fig, axes = plt.subplots(1, 2, figsize=(20, 8),
+                             subplot_kw={'projection': ccrs.Mollweide()})
+
+    # LEFT PLOT: Before step (at current_age)
+    ax = axes[0]
+
+    # Plot tracers BEFORE
+    scatter = ax.scatter(
+        before_lonlat[:, 0], before_lonlat[:, 1],
+        c=before_ages,
+        s=2,
+        cmap='viridis_r',
+        vmin=0, vmax=max(10, before_ages.max()) if len(before_ages) > 0 else 10,
+        transform=ccrs.PlateCarree(),
+        zorder=5
+    )
+
+    # Plot ridges as black dots (scatter avoids dateline artifacts)
+    if len(ridge_lons) > 0:
+        ax.scatter(ridge_lons, ridge_lats, c='black', s=3, marker='.',
+                   transform=ccrs.PlateCarree(), zorder=10, label='Ridges')
+
+    # Plot subduction zones as triangles
+    if len(sub_lons) > 0:
+        ax.scatter(sub_lons, sub_lats, c='red', s=8, marker='^',
+                   transform=ccrs.PlateCarree(), zorder=10, label='Subduction')
+
+    ax.coastlines(resolution='110m', linewidth=0.5)
+    ax.set_global()
+    ax.set_title(
+        f'BEFORE: Tracers at {current_age} Ma\n(ridges=dots, subduction=triangles)')
+    ax.legend(loc='lower left', fontsize=8)
+
+    # RIGHT PLOT: After step (at target_age)
+    ax = axes[1]
+
+    # Plot tracers AFTER
+    scatter2 = ax.scatter(
+        lonlat[:, 0], lonlat[:, 1],
+        c=ages,
+        s=2,
+        cmap='viridis_r',
+        vmin=0, vmax=max(10, ages.max()) if len(ages) > 0 else 10,
+        transform=ccrs.PlateCarree(),
+        zorder=5
+    )
+
+    # Plot ridges as black dots (at target_age)
+    if len(ridge_lons_after) > 0:
+        ax.scatter(ridge_lons_after, ridge_lats_after, c='black', s=3, marker='.',
+                   transform=ccrs.PlateCarree(), zorder=10, label='Ridges')
+
+    # Plot subduction zones as triangles (at target_age)
+    if len(sub_lons_after) > 0:
+        ax.scatter(sub_lons_after, sub_lats_after, c='red', s=8, marker='^',
+                   transform=ccrs.PlateCarree(), zorder=10, label='Subduction')
+
+    ax.coastlines(resolution='110m', linewidth=0.5)
+    ax.set_global()
+    ax.set_title(
+        f'AFTER: Tracers at {target_age} Ma\n(ridges=dots, subduction=triangles)')
+    ax.legend(loc='lower left', fontsize=8)
+
+    # Add colorbar
+    cbar = plt.colorbar(scatter2, ax=axes, orientation='horizontal',
+                        pad=0.05, aspect=40, shrink=0.6)
+    cbar.set_label('Seafloor Age (Myr)', fontsize=12)
+
+    fig.suptitle(f'Step from {current_age} Ma to {target_age} Ma', fontsize=14)
+    fig.tight_layout()
+    fig.savefig(output_dir / f'seafloor_age_{target_age:03d}Ma.png', dpi=150)
+    plt.close(fig)
+    print(f"  Saved plot: seafloor_age_{target_age:03d}Ma.png")
+
+
 # -
 
 # ## Checkpointing
