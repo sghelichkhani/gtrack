@@ -2,28 +2,34 @@
 Seafloor age tracking using Lagrangian particle tracking.
 
 This module provides the main API for computing seafloor ages
-as geological age decreases toward present (0 Ma).
+using pygplates' C++ backend for efficient reconstruction.
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Union
-from .model import SeafloorAgeModel
+from typing import Callable, Dict, List, Optional, Union
+
+import pygplates
+
 from .config import TracerConfig
-from .geometry import XYZ2LatLon
 from .point_rotation import PointCloud
+from .mesh import create_icosahedral_mesh, create_icosahedral_mesh_latlon
+from .mor_seeds import generate_mor_seeds
+from .boundaries import ContinentalPolygonCache
+from .initial_conditions import compute_initial_ages, default_age_distance_law
 
 
 class SeafloorAgeTracker:
     """
-    Seafloor age tracker using Lagrangian particle tracking.
+    Seafloor age tracker using Lagrangian particle tracking with C++ backend.
 
-    Maintains tracer state and provides incremental evolution
-    as geological age decreases toward present (0 Ma).
+    Uses pygplates.TopologicalModel.reconstruct_geometry() for efficient
+    point advection with built-in collision detection.
 
     Key features:
-    - Stateful: Maintains tracers in memory between updates
-    - Incremental: Only evolves from current state to new state
-    - PointCloud output: Returns PointCloud with 'age' property
+    - GPlately-compatible: Matches GPlately's SeafloorGrid output
+    - C++ backend: Fast reconstruction using pygplates internals
+    - Icosahedral initialization: Full ocean coverage from start
+    - Continental filtering: Via polygon queries with caching
     - Checkpointing: Save/restore state for restarts
 
     Parameters
@@ -31,13 +37,12 @@ class SeafloorAgeTracker:
     rotation_files : list of str
         Paths to rotation model files (.rot).
     topology_files : list of str
-        Paths to topology/plate boundary files (.gpmlz).
-    continental_polygons : str
-        Path to continental polygon file (.gpmlz).
+        Paths to topology/plate boundary files (.gpml/.gpmlz).
+    continental_polygons : str, optional
+        Path to continental polygon file. If None, tracers are not
+        removed when they enter continental regions.
     config : TracerConfig, optional
         Configuration parameters. If None, uses defaults.
-    preload_boundaries : bool, default=True
-        Whether to pre-load all boundaries. Set False for memory-constrained systems.
     verbose : bool, default=True
         Print progress information.
 
@@ -50,7 +55,7 @@ class SeafloorAgeTracker:
     ...     continental_polygons='continents.gpmlz'
     ... )
     >>>
-    >>> # Initialize tracers at ridges for 200 Ma
+    >>> # Initialize with icosahedral mesh (GPlately-compatible)
     >>> tracker.initialize(starting_age=200)
     >>>
     >>> # Step forward (decreasing geological age toward present)
@@ -64,12 +69,12 @@ class SeafloorAgeTracker:
         self,
         rotation_files: Union[str, List[str]],
         topology_files: Union[str, List[str]],
-        continental_polygons: str,
+        continental_polygons: Optional[str] = None,
         config: Optional[TracerConfig] = None,
-        preload_boundaries: bool = True,
-        verbose: bool = True
+        verbose: bool = True,
     ):
         self.verbose = verbose
+        self._config = config if config else TracerConfig()
 
         # Ensure lists
         if isinstance(rotation_files, str):
@@ -79,39 +84,71 @@ class SeafloorAgeTracker:
 
         self._rotation_files = rotation_files
         self._topology_files = topology_files
-        self._continental_polygons = continental_polygons
-        self._config = config if config else TracerConfig()
+        self._continental_polygons_path = continental_polygons
 
         if self.verbose:
             print("Initializing SeafloorAgeTracker...")
 
-        # Initialize TracTec model
-        self._model = SeafloorAgeModel(
-            rotation_files=rotation_files,
-            topology_files=topology_files,
-            continental_polygons=continental_polygons,
-            config=self._config
+        # Load rotation model
+        self._rotation_model = pygplates.RotationModel(rotation_files)
+
+        # Load topology features
+        self._topology_features = []
+        for f in topology_files:
+            self._topology_features.extend(pygplates.FeatureCollection(f))
+
+        # Create TopologicalModel for C++ backend reconstruction
+        self._topological_model = pygplates.TopologicalModel(
+            self._topology_features, self._rotation_model
         )
 
-        self._preload_boundaries = preload_boundaries
+        # Set up continental polygon cache
+        if continental_polygons is not None:
+            self._continental_cache = ContinentalPolygonCache(
+                continental_polygons,
+                self._rotation_model,
+                max_cache_size=self._config.continental_cache_size,
+            )
+        else:
+            self._continental_cache = None
 
         # State variables
         self._current_age: Optional[float] = None
-        self._tracers: Optional[np.ndarray] = None
+        self._lats: Optional[np.ndarray] = None
+        self._lons: Optional[np.ndarray] = None
+        self._ages: Optional[np.ndarray] = None  # Material ages (time since formation)
         self._initialized = False
 
         if self.verbose:
             print("  Initialization complete.")
 
-    def initialize(self, starting_age: float) -> int:
+    def initialize(
+        self,
+        starting_age: float,
+        method: str = 'icosahedral',
+        refinement_levels: Optional[int] = None,
+        initial_ocean_mean_spreading_rate: Optional[float] = None,
+        age_distance_law: Optional[Callable[[np.ndarray, float], np.ndarray]] = None,
+    ) -> int:
         """
-        Initialize tracers at ridges for given geological age.
+        Initialize tracers for given geological age.
 
         Parameters
         ----------
         starting_age : float
-            Starting geological age (Ma). Tracers are placed at
-            ridge locations at this age.
+            Starting geological age (Ma). Tracers are placed based on
+            ocean structure at this age.
+        method : str, default='icosahedral'
+            Initialization method:
+            - 'icosahedral': Full ocean mesh with computed ages (GPlately-compatible)
+            - 'ridge_only': Tracers only at ridges with age=0 (legacy TracTec)
+        refinement_levels : int, optional
+            Icosahedral mesh refinement level. If None, uses config default.
+        initial_ocean_mean_spreading_rate : float, optional
+            Spreading rate for age calculation (mm/yr). If None, uses config default.
+        age_distance_law : callable, optional
+            Custom function to convert distance to age.
+            Signature: (distances_km, spreading_rate_mm_yr) -> ages_myr
 
         Returns
         -------
@@ -120,39 +157,132 @@ class SeafloorAgeTracker:
 
         Examples
         --------
+        >>> # GPlately-compatible initialization
         >>> tracker.initialize(starting_age=200)
-        Initialized with 12534 tracers at 200 Ma
-        12534
+        >>>
+        >>> # Higher resolution
+        >>> tracker.initialize(starting_age=200, refinement_levels=6)
+        >>>
+        >>> # Custom age calculation
+        >>> def my_age_law(distances, rate):
+        ...     return distances / (rate / 2) * 1.1  # 10% older
+        >>> tracker.initialize(starting_age=200, age_distance_law=my_age_law)
         """
+        if refinement_levels is None:
+            refinement_levels = self._config.default_refinement_levels
+        if initial_ocean_mean_spreading_rate is None:
+            initial_ocean_mean_spreading_rate = self._config.initial_ocean_mean_spreading_rate
+
         if self.verbose:
-            print(f"\nInitializing tracers at {starting_age} Ma...")
+            print(f"\nInitializing tracers at {starting_age} Ma (method='{method}')...")
 
-        # Pre-load boundaries if requested
-        if self._preload_boundaries:
-            if self.verbose:
-                print("  Pre-loading boundaries...")
-            self._model.preload_boundaries(range(0, int(starting_age) + 1))
+        if method == 'icosahedral':
+            self._initialize_icosahedral(
+                starting_age,
+                refinement_levels,
+                initial_ocean_mean_spreading_rate,
+                age_distance_law,
+            )
+        elif method == 'ridge_only':
+            self._initialize_ridge_only(starting_age)
+        else:
+            raise ValueError(f"Unknown initialization method: {method}")
 
-            if self.verbose:
-                memory_info = self._model._boundary_cache.get_memory_usage()
-                print(f"  Cached {memory_info['num_timesteps_cached']} timesteps")
-                print(f"  Memory: {memory_info['total_mb']:.1f} MB")
-
-        self._tracers = self._model._initialize_tracers(starting_age)
         self._current_age = starting_age
         self._initialized = True
 
-        num_tracers = len(self._tracers)
+        if self.verbose:
+            print(f"  Initialized with {len(self._lats)} tracers at {starting_age} Ma")
+
+        return len(self._lats)
+
+    def _initialize_icosahedral(
+        self,
+        starting_age: float,
+        refinement_levels: int,
+        spreading_rate: float,
+        age_distance_law: Optional[Callable],
+    ):
+        """Initialize with icosahedral mesh (GPlately-compatible)."""
+        if self.verbose:
+            print(f"  Creating icosahedral mesh (level {refinement_levels})...")
+
+        # Create icosahedral mesh and get lat/lon coordinates directly
+        mesh_lats, mesh_lons = create_icosahedral_mesh_latlon(refinement_levels)
 
         if self.verbose:
-            print(f"  Initialized with {num_tracers} tracers at {starting_age} Ma")
+            print(f"  Created mesh with {len(mesh_lats)} points")
 
-        return num_tracers
+        # Resolve topologies at starting time (needed for compute_initial_ages)
+        resolved_topologies = []
+        shared_boundary_sections = []
+        pygplates.resolve_topologies(
+            self._topology_features,
+            self._rotation_model,
+            resolved_topologies,
+            starting_age,
+            shared_boundary_sections,
+        )
+
+        # Filter out continental points if we have continental polygons
+        if self._continental_cache is not None:
+            # Get continental mask
+            continental_mask = self._continental_cache.get_continental_mask(
+                mesh_lats, mesh_lons, starting_age
+            )
+
+            # Filter to ocean points
+            ocean_mask = ~continental_mask
+            ocean_lats = mesh_lats[ocean_mask]
+            ocean_lons = mesh_lons[ocean_mask]
+
+            if self.verbose:
+                print(f"  Filtered to {len(ocean_lats)} ocean points (removed {continental_mask.sum()} continental)")
+
+            # Create ocean point MultiPointOnSphere for compute_initial_ages
+            ocean_points = pygplates.MultiPointOnSphere(zip(ocean_lats, ocean_lons))
+        else:
+            ocean_lats = mesh_lats
+            ocean_lons = mesh_lons
+            ocean_points = pygplates.MultiPointOnSphere(zip(ocean_lats, ocean_lons))
+
+        # Compute initial ages from distance to ridge (plate-based approach)
+        if self.verbose:
+            print("  Computing initial ages from distance to ridge...")
+
+        lons, lats, ages = compute_initial_ages(
+            ocean_points,
+            resolved_topologies,
+            shared_boundary_sections,
+            initial_ocean_mean_spreading_rate=spreading_rate,
+            age_distance_law=age_distance_law,
+        )
+
+        self._lats = lats
+        self._lons = lons
+        self._ages = ages
+
+    def _initialize_ridge_only(self, starting_age: float):
+        """Initialize with tracers only at ridges (legacy TracTec approach)."""
+        if self.verbose:
+            print("  Generating ridge seed points...")
+
+        lats, lons = generate_mor_seeds(
+            starting_age,
+            self._topology_features,
+            self._rotation_model,
+            ridge_sampling_degrees=self._config.ridge_sampling_degrees,
+            spreading_offset_degrees=self._config.spreading_offset_degrees,
+        )
+
+        self._lats = lats
+        self._lons = lons
+        self._ages = np.zeros(len(lats))  # All tracers start with age 0
 
     def initialize_from_cloud(
         self,
         cloud: PointCloud,
-        current_age: float
+        current_age: float,
     ) -> int:
         """
         Initialize from existing PointCloud.
@@ -177,12 +307,6 @@ class SeafloorAgeTracker:
         ------
         ValueError
             If cloud does not have 'age' property.
-
-        Examples
-        --------
-        >>> # Restart from checkpoint
-        >>> cloud, metadata = checkpoint.load('state.npz')
-        >>> tracker.initialize_from_cloud(cloud, metadata['geological_age'])
         """
         if 'age' not in cloud.properties:
             raise ValueError(
@@ -193,26 +317,22 @@ class SeafloorAgeTracker:
         if self.verbose:
             print(f"\nInitializing from PointCloud at {current_age} Ma...")
 
-        # Pre-load boundaries if requested
-        if self._preload_boundaries:
-            if self.verbose:
-                print("  Pre-loading boundaries...")
-            self._model.preload_boundaries(range(0, int(current_age) + 1))
-
-        # Convert PointCloud to internal tracer format: (x, y, z, age)
-        ages = cloud.get_property('age')
-        self._tracers = np.column_stack([cloud.xyz, ages])
+        # Convert XYZ to lat/lon
+        lonlat = cloud.lonlat
+        self._lons = lonlat[:, 0]
+        self._lats = lonlat[:, 1]
+        self._ages = cloud.get_property('age').copy()
         self._current_age = current_age
         self._initialized = True
 
         if self.verbose:
-            print(f"  Initialized with {len(self._tracers)} tracers at {current_age} Ma")
+            print(f"  Initialized with {len(self._lats)} tracers at {current_age} Ma")
 
-        return len(self._tracers)
+        return len(self._lats)
 
     def step_to(self, target_age: float) -> PointCloud:
         """
-        Evolve tracers to target geological age.
+        Evolve tracers to target geological age using C++ backend.
 
         Can only step forward (decreasing geological age toward 0).
 
@@ -232,12 +352,6 @@ class SeafloorAgeTracker:
             If tracker is not initialized.
         ValueError
             If target_age > current_age (can only go forward).
-
-        Examples
-        --------
-        >>> cloud = tracker.step_to(150)
-        >>> xyz = cloud.xyz
-        >>> ages = cloud.get_property('age')
         """
         if not self._initialized:
             raise RuntimeError(
@@ -258,19 +372,126 @@ class SeafloorAgeTracker:
         if self.verbose:
             print(f"\nEvolving: {self._current_age} Ma -> {target_age} Ma")
 
-        # Evolve tracers
-        self._tracers = self._model._evolve_tracers(
-            self._tracers,
-            from_time=self._current_age,
-            to_time=target_age
-        )
+        # Process in time_step increments
+        time = self._current_age
+        while time > target_age:
+            next_time = max(time - self._config.time_step, target_age)
+
+            if len(self._lats) == 0:
+                if self.verbose:
+                    print("  Warning: No points to reconstruct")
+                break
+
+            # Create MultiPointOnSphere from lat/lon tuples (faster than individual PointOnSphere)
+            points = pygplates.MultiPointOnSphere(
+                zip(self._lats, self._lons)
+            )
+
+            # Reconstruct using C++ backend
+            # Note: reconstruct_geometry needs integral time values
+            reconstructed_time_span = self._topological_model.reconstruct_geometry(
+                points,
+                initial_time=int(time),
+                youngest_time=int(next_time),
+                time_increment=int(self._config.time_step),
+                deactivate_points=pygplates.ReconstructedGeometryTimeSpan.DefaultDeactivatePoints(
+                    threshold_velocity_delta=self._config.velocity_delta_threshold_cm_yr,
+                    threshold_distance_to_boundary=self._config.distance_threshold_per_myr,
+                    deactivate_points_that_fall_outside_a_network=True,
+                ),
+            )
+
+            # Get reconstructed points (inactive points are None)
+            reconstructed_points = reconstructed_time_span.get_geometry_points(
+                int(next_time), return_inactive_points=True
+            )
+
+            # Update coordinates and ages, removing inactive points
+            self._update_from_reconstructed(reconstructed_points, time - next_time)
+
+            # Remove continental points
+            if self._continental_cache is not None:
+                self._remove_continental_points(next_time)
+
+            # Add new MOR seed points
+            self._add_mor_seeds(next_time)
+
+            time = next_time
 
         self._current_age = target_age
 
         if self.verbose:
-            print(f"  Current tracer count: {len(self._tracers)}")
+            print(f"  Current tracer count: {len(self._lats)}")
 
         return self.get_current_state()
+
+    def _update_from_reconstructed(
+        self,
+        reconstructed_points: List,
+        delta_time: float,
+    ):
+        """Update coordinates from reconstruction, removing inactive points."""
+        # Create boolean mask for active (non-None) points
+        active_mask = np.array([p is not None for p in reconstructed_points], dtype=bool)
+        n_active = active_mask.sum()
+
+        if n_active == 0:
+            self._lats = np.array([])
+            self._lons = np.array([])
+            self._ages = np.array([])
+            return
+
+        # Pre-allocate arrays
+        new_lats = np.empty(n_active)
+        new_lons = np.empty(n_active)
+
+        # Extract coordinates from active points
+        j = 0
+        for i, point in enumerate(reconstructed_points):
+            if point is not None:
+                new_lats[j], new_lons[j] = point.to_lat_lon()
+                j += 1
+
+        # Update ages using vectorized operation
+        self._lats = new_lats
+        self._lons = new_lons
+        self._ages = self._ages[active_mask] + delta_time
+
+    def _remove_continental_points(self, time: float):
+        """Remove points inside continental polygons."""
+        if len(self._lats) == 0:
+            return
+
+        continental_mask = self._continental_cache.get_continental_mask(
+            self._lats, self._lons, time
+        )
+
+        if continental_mask.any():
+            ocean_mask = ~continental_mask
+            self._lats = self._lats[ocean_mask]
+            self._lons = self._lons[ocean_mask]
+            self._ages = self._ages[ocean_mask]
+
+            if self.verbose:
+                print(f"    Removed {continental_mask.sum()} continental points")
+
+    def _add_mor_seeds(self, time: float):
+        """Add new MOR seed points."""
+        new_lats, new_lons = generate_mor_seeds(
+            time,
+            self._topology_features,
+            self._rotation_model,
+            ridge_sampling_degrees=self._config.ridge_sampling_degrees,
+            spreading_offset_degrees=self._config.spreading_offset_degrees,
+        )
+
+        if len(new_lats) > 0:
+            self._lats = np.concatenate([self._lats, new_lats])
+            self._lons = np.concatenate([self._lons, new_lons])
+            self._ages = np.concatenate([self._ages, np.zeros(len(new_lats))])
+
+            if self.verbose:
+                print(f"    Added {len(new_lats)} new MOR seed points")
 
     def get_current_state(self) -> PointCloud:
         """
@@ -281,17 +502,132 @@ class SeafloorAgeTracker:
         PointCloud
             Current tracer positions with 'age' property.
         """
-        if self._tracers is None or len(self._tracers) == 0:
-            # Return empty PointCloud
+        if self._lats is None or len(self._lats) == 0:
             return PointCloud(
                 xyz=np.zeros((0, 3)),
                 properties={'age': np.array([])}
             )
 
+        # Convert lat/lon to XYZ
+        lats_rad = np.radians(self._lats)
+        lons_rad = np.radians(self._lons)
+        r = self._config.earth_radius
+
+        x = r * np.cos(lats_rad) * np.cos(lons_rad)
+        y = r * np.cos(lats_rad) * np.sin(lons_rad)
+        z = r * np.sin(lats_rad)
+
+        xyz = np.column_stack([x, y, z])
+
         return PointCloud(
-            xyz=self._tracers[:, :3].copy(),
-            properties={'age': self._tracers[:, 3].copy()}
+            xyz=xyz,
+            properties={'age': self._ages.copy()}
         )
+
+    def reinitialize_to_mesh(
+        self,
+        refinement_levels: Optional[int] = None,
+        k_neighbors: Optional[int] = None,
+        max_distance: Optional[float] = None,
+    ) -> int:
+        """
+        Reinitialize all points to icosahedral mesh via weighted interpolation.
+
+        This creates a new icosahedral mesh and interpolates ages from the
+        current points using inverse distance weighting.
+
+        Parameters
+        ----------
+        refinement_levels : int, optional
+            Mesh refinement level. If None, uses config default.
+        k_neighbors : int, optional
+            Number of nearest neighbors for interpolation. If None, uses config default.
+        max_distance : float, optional
+            Maximum distance (meters) for valid neighbors. If None, uses config default.
+
+        Returns
+        -------
+        int
+            Number of points in new mesh.
+        """
+        if not self._initialized:
+            raise RuntimeError("Must initialize first before reinitializing to mesh")
+
+        from scipy.spatial import cKDTree
+
+        if refinement_levels is None:
+            refinement_levels = self._config.default_refinement_levels
+        if k_neighbors is None:
+            k_neighbors = self._config.reinit_k_neighbors
+        if max_distance is None:
+            max_distance = self._config.reinit_max_distance
+
+        if self.verbose:
+            print(f"\nReinitializing to icosahedral mesh (level {refinement_levels})...")
+
+        # Create new mesh
+        mesh_lats, mesh_lons = create_icosahedral_mesh_latlon(refinement_levels)
+
+        # Filter out continental points
+        if self._continental_cache is not None:
+            continental_mask = self._continental_cache.get_continental_mask(
+                mesh_lats, mesh_lons, self._current_age
+            )
+            ocean_mask = ~continental_mask
+            mesh_lats = mesh_lats[ocean_mask]
+            mesh_lons = mesh_lons[ocean_mask]
+
+        # Convert current points to XYZ for KDTree
+        def latlon_to_xyz(lats, lons, r=1.0):
+            lats_rad = np.radians(lats)
+            lons_rad = np.radians(lons)
+            x = r * np.cos(lats_rad) * np.cos(lons_rad)
+            y = r * np.cos(lats_rad) * np.sin(lons_rad)
+            z = r * np.sin(lats_rad)
+            return np.column_stack([x, y, z])
+
+        current_xyz = latlon_to_xyz(self._lats, self._lons, self._config.earth_radius)
+        mesh_xyz = latlon_to_xyz(mesh_lats, mesh_lons, self._config.earth_radius)
+
+        # Build KDTree and query
+        tree = cKDTree(current_xyz)
+        distances, indices = tree.query(mesh_xyz, k=k_neighbors)
+
+        # Interpolate ages using inverse distance weighting
+        new_ages = np.zeros(len(mesh_lats))
+        valid_mask = np.ones(len(mesh_lats), dtype=bool)
+
+        for i in range(len(mesh_lats)):
+            dists = distances[i]
+            idxs = indices[i]
+
+            # Filter by max distance
+            valid = dists < max_distance
+            if not valid.any():
+                valid_mask[i] = False
+                continue
+
+            dists = dists[valid]
+            idxs = idxs[valid]
+
+            # Inverse distance weighting
+            if len(dists) == 1 or dists[0] < 1e-10:
+                # Exact match or single point
+                new_ages[i] = self._ages[idxs[0]]
+            else:
+                weights = 1.0 / dists
+                weights /= weights.sum()
+                new_ages[i] = np.sum(weights * self._ages[idxs])
+
+        # Update state
+        self._lats = mesh_lats[valid_mask]
+        self._lons = mesh_lons[valid_mask]
+        self._ages = new_ages[valid_mask]
+
+        if self.verbose:
+            print(f"  Reinitialized to {len(self._lats)} points")
+
+        return len(self._lats)
 
     @property
     def current_age(self) -> Optional[float]:
@@ -301,7 +637,7 @@ class SeafloorAgeTracker:
     @property
     def n_tracers(self) -> int:
         """Number of tracers."""
-        return len(self._tracers) if self._tracers is not None else 0
+        return len(self._lats) if self._lats is not None else 0
 
     def save_checkpoint(self, filepath: str) -> None:
         """
@@ -311,10 +647,6 @@ class SeafloorAgeTracker:
         ----------
         filepath : str
             Path to save checkpoint (.npz format).
-
-        Examples
-        --------
-        >>> tracker.save_checkpoint('checkpoint_150Ma.npz')
         """
         from .io_formats import PointCloudCheckpoint
 
@@ -343,10 +675,6 @@ class SeafloorAgeTracker:
         ----------
         filepath : str
             Path to checkpoint file.
-
-        Examples
-        --------
-        >>> tracker.load_checkpoint('checkpoint_150Ma.npz')
         """
         from .io_formats import PointCloudCheckpoint
 
@@ -362,7 +690,7 @@ class SeafloorAgeTracker:
         if self.verbose:
             print(f"Loaded checkpoint from {filepath}")
             print(f"  Geological age: {self._current_age} Ma")
-            print(f"  Tracers: {len(self._tracers)}")
+            print(f"  Tracers: {len(self._lats)}")
 
     def get_statistics(self) -> Dict:
         """
@@ -373,7 +701,7 @@ class SeafloorAgeTracker:
         dict
             Statistics including mean age, max age, coverage, etc.
         """
-        if not self._initialized or len(self._tracers) == 0:
+        if not self._initialized or len(self._ages) == 0:
             return {
                 'count': 0,
                 'mean_age': 0,
@@ -382,14 +710,12 @@ class SeafloorAgeTracker:
                 'geological_age': self._current_age
             }
 
-        ages = self._tracers[:, 3]
-
         return {
-            'count': len(ages),
-            'mean_age': float(np.mean(ages)),
-            'max_age': float(np.max(ages)),
-            'min_age': float(np.min(ages)),
-            'std_age': float(np.std(ages)),
+            'count': len(self._ages),
+            'mean_age': float(np.mean(self._ages)),
+            'max_age': float(np.max(self._ages)),
+            'min_age': float(np.min(self._ages)),
+            'std_age': float(np.std(self._ages)),
             'geological_age': self._current_age
         }
 
@@ -400,16 +726,15 @@ class SeafloorAgeTracker:
         starting_age: float,
         rotation_files: Union[str, List[str]],
         topology_files: Union[str, List[str]],
-        continental_polygons: str,
+        continental_polygons: Optional[str] = None,
         config: Optional[TracerConfig] = None,
-        verbose: bool = True
+        verbose: bool = True,
     ) -> PointCloud:
         """
         One-shot computation of seafloor ages (functional interface).
 
         Creates a tracker, initializes at starting_age, and evolves
-        to target_age in a single call. Use this when you don't need
-        incremental updates.
+        to target_age in a single call.
 
         Parameters
         ----------
@@ -420,9 +745,9 @@ class SeafloorAgeTracker:
         rotation_files : list of str
             Paths to rotation model files (.rot).
         topology_files : list of str
-            Paths to topology/plate boundary files (.gpmlz).
-        continental_polygons : str
-            Path to continental polygon file (.gpmlz).
+            Paths to topology/plate boundary files (.gpml/.gpmlz).
+        continental_polygons : str, optional
+            Path to continental polygon file.
         config : TracerConfig, optional
             Configuration parameters.
         verbose : bool, default=True
@@ -439,8 +764,7 @@ class SeafloorAgeTracker:
         ...     target_age=100,
         ...     starting_age=200,
         ...     rotation_files=['rotations.rot'],
-        ...     topology_files=['topologies.gpmlz'],
-        ...     continental_polygons='continents.gpmlz'
+        ...     topology_files=['topologies.gpmlz']
         ... )
         >>> ages = cloud.get_property('age')
         """
@@ -449,14 +773,13 @@ class SeafloorAgeTracker:
             topology_files=topology_files,
             continental_polygons=continental_polygons,
             config=config,
-            preload_boundaries=True,
-            verbose=verbose
+            verbose=verbose,
         )
 
         tracker.initialize(starting_age)
         return tracker.step_to(target_age)
 
 
-# Backwards compatibility aliases (deprecated)
+# Backwards compatibility aliases
 HPCSeafloorAgeTracker = SeafloorAgeTracker
 MemoryEfficientSeafloorAgeTracker = SeafloorAgeTracker

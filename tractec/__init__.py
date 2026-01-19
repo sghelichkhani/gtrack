@@ -1,14 +1,39 @@
 """
-TracTec: High-performance seafloor age grid generation and point rotation.
+TracTec: High-performance seafloor age tracking and point rotation.
 
 This package provides tools for:
 - Computing seafloor ages from plate tectonic reconstructions using Lagrangian
-  particle tracking
+  particle tracking with pygplates' C++ backend (GPlately-compatible)
 - Rotating user-provided points through geological time
 - Filtering points by polygon containment (e.g., continental regions)
+
+The main entry point is SeafloorAgeTracker, which provides both a stepwise
+interface and a one-shot compute_ages() method.
+
+Example
+-------
+>>> from tractec import SeafloorAgeTracker, TracerConfig
+>>>
+>>> # Simple one-shot computation
+>>> cloud = SeafloorAgeTracker.compute_ages(
+...     target_age=100,
+...     starting_age=200,
+...     rotation_files=['rotations.rot'],
+...     topology_files=['topologies.gpmlz']
+... )
+>>> ages = cloud.get_property('age')
+>>>
+>>> # Or stepwise for intermediate states
+>>> tracker = SeafloorAgeTracker(
+...     rotation_files=['rotations.rot'],
+...     topology_files=['topologies.gpmlz']
+... )
+>>> tracker.initialize(starting_age=200)
+>>> for age in range(199, -1, -1):
+...     cloud = tracker.step_to(age)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Core seafloor age functionality
 from .config import TracerConfig
@@ -27,8 +52,31 @@ from .io_formats import (
     PointCloudCheckpoint,
 )
 
+# Utility modules (for advanced users)
+from .mesh import (
+    create_icosahedral_mesh,
+    create_icosahedral_mesh_latlon,
+    create_icosahedral_mesh_xyz,
+    mesh_point_count,
+)
+from .mor_seeds import (
+    generate_mor_seeds,
+    generate_mor_seeds_with_plate_ids,
+    get_ridge_geometries,
+)
+from .initial_conditions import (
+    compute_initial_ages,
+    default_age_distance_law,
+)
+from .boundaries import (
+    ContinentalPolygonCache,
+    ResolvedTopologyCache,
+    extract_ridge_geometries,
+    extract_ridge_points_latlon,
+)
+
 __all__ = [
-    # Seafloor age
+    # Main API
     "SeafloorAgeTracker",
     "TracerConfig",
     # Point rotation
@@ -43,4 +91,21 @@ __all__ = [
     "save_points_latlon",
     "save_points_gpml",
     "PointCloudCheckpoint",
+    # Mesh generation (advanced)
+    "create_icosahedral_mesh",
+    "create_icosahedral_mesh_latlon",
+    "create_icosahedral_mesh_xyz",
+    "mesh_point_count",
+    # MOR seeds (advanced)
+    "generate_mor_seeds",
+    "generate_mor_seeds_with_plate_ids",
+    "get_ridge_geometries",
+    # Initial conditions (advanced)
+    "compute_initial_ages",
+    "default_age_distance_law",
+    # Caching (advanced)
+    "ContinentalPolygonCache",
+    "ResolvedTopologyCache",
+    "extract_ridge_geometries",
+    "extract_ridge_points_latlon",
 ]

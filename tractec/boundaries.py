@@ -1,215 +1,244 @@
 """
-Boundary location management and caching for mid-ocean ridges and subduction zones.
+Plate boundary caching and extraction utilities.
 
-This module handles the computation and caching of plate boundary locations,
-eliminating file I/O bottlenecks through intelligent in-memory caching.
+This module provides caching for resolved topologies and utility functions
+for extracting plate boundary information. The main reconstruction is handled
+by pygplates' C++ backend (TopologicalModel.reconstruct_geometry).
 """
 
 import numpy as np
 import pygplates
-from functools import lru_cache
-from typing import Optional, Tuple, Dict
-from .geometry import LatLon2XYZ, Segments2Points
+from collections import OrderedDict
+from typing import Dict, List, Optional, Tuple
+from gplately import ptt
 
 
-class BoundaryCache:
+class ResolvedTopologyCache:
     """
-    Cache for ridge and subduction zone locations across multiple timesteps.
-
-    This class pre-computes and stores boundary locations to avoid repeated
-    file I/O and topology resolution. Supports both eager pre-loading and
-    lazy on-demand computation.
+    LRU cache for resolved topologies at different timesteps.
 
     Parameters
     ----------
-    topology_features : pygplates.FeatureCollection
-        Plate topology features
+    topology_features : pygplates.FeatureCollection or list
+        Topology features for resolving.
     rotation_model : pygplates.RotationModel
-        Plate rotation model
-    ridge_resolution : float, optional
-        Sampling resolution for ridges in meters (default: 50 km)
-    subduction_resolution : float, optional
-        Sampling resolution for subduction zones in meters (default: 20 km)
+        Rotation model for reconstruction.
+    max_cache_size : int, default=10
+        Maximum number of timesteps to cache.
     """
 
     def __init__(
         self,
         topology_features,
-        rotation_model,
-        ridge_resolution: float = 50e3,
-        subduction_resolution: float = 20e3,
+        rotation_model: pygplates.RotationModel,
+        max_cache_size: int = 10,
     ):
         self.topology_features = topology_features
         self.rotation_model = rotation_model
-        self.ridge_resolution = ridge_resolution
-        self.subduction_resolution = subduction_resolution
+        self.max_cache_size = max_cache_size
 
-        # Cache dictionaries: {time: xyz_points}
-        self._ridge_cache: Dict[float, np.ndarray] = {}
-        self._subduction_cache: Dict[float, np.ndarray] = {}
+        # LRU cache: {time: (resolved_topologies, shared_boundary_sections)}
+        self._cache: OrderedDict = OrderedDict()
 
-    def preload(self, time_range):
+    def get(self, time: float) -> Tuple[List, List]:
         """
-        Pre-compute and cache boundaries for a range of times.
-
-        Parameters
-        ----------
-        time_range : iterable
-            Time points to pre-compute (e.g., range(0, 400))
-        """
-        for time in time_range:
-            # Compute both to populate caches
-            _ = self.get_ridges(time)
-            _ = self.get_subduction(time)
-            print(f"Done preloading boundaries for time: {time}")
-
-    def get_ridges(self, time: float, as_xyz: bool = True) -> np.ndarray:
-        """
-        Get mid-ocean ridge locations at specified time.
+        Get resolved topologies and shared boundary sections for a time.
 
         Parameters
         ----------
         time : float
-            Time in Ma
-        as_xyz : bool, default=True
-            If True, return Cartesian XYZ coordinates.
-            If False, return lat/lon coordinates.
+            Geological time (Ma).
 
         Returns
         -------
-        np.ndarray
-            Ridge points as (N, 3) XYZ or (N, 2) lat/lon array
+        resolved_topologies : list
+            List of resolved topology polygons.
+        shared_boundary_sections : list
+            List of shared boundary sections.
         """
-        if time not in self._ridge_cache:
-            self._ridge_cache[time] = self._compute_ridges(time)
+        if time in self._cache:
+            # Move to end (most recently used)
+            self._cache.move_to_end(time)
+            return self._cache[time]
 
-        ridges = self._ridge_cache[time]
-
-        if not as_xyz and ridges.shape[1] == 3:
-            # Convert from XYZ to lat/lon
-            from .geometry import XYZ2LatLon
-            lats, lons = XYZ2LatLon(ridges)
-            return np.column_stack([lats, lons])
-
-        return ridges
-
-    def get_subduction(self, time: float, as_xyz: bool = True) -> np.ndarray:
-        """
-        Get subduction zone locations at specified time.
-
-        Parameters
-        ----------
-        time : float
-            Time in Ma
-        as_xyz : bool, default=True
-            If True, return Cartesian XYZ coordinates.
-            If False, return lat/lon coordinates.
-
-        Returns
-        -------
-        np.ndarray
-            Subduction points as (N, 3) XYZ or (N, 2) lat/lon array
-        """
-        if time not in self._subduction_cache:
-            self._subduction_cache[time] = self._compute_subduction(time)
-
-        subduction = self._subduction_cache[time]
-
-        if not as_xyz and subduction.shape[1] == 3:
-            # Convert from XYZ to lat/lon
-            from .geometry import XYZ2LatLon
-            lats, lons = XYZ2LatLon(subduction)
-            return np.column_stack([lats, lons])
-
-        return subduction
-
-    def _compute_ridges(self, time: float) -> np.ndarray:
-        """Compute ridge locations at time and convert to XYZ."""
-        ridge_segments, _ = _get_ridge_subduction_locations(
-            time, self.topology_features, self.rotation_model
+        # Resolve topologies
+        resolved_topologies = []
+        shared_boundary_sections = []
+        pygplates.resolve_topologies(
+            self.topology_features,
+            self.rotation_model,
+            resolved_topologies,
+            time,
+            shared_boundary_sections,
         )
 
-        # Convert segments to points at desired resolution
-        lats, lons = Segments2Points(ridge_segments, self.ridge_resolution)
+        # Add to cache
+        self._cache[time] = (resolved_topologies, shared_boundary_sections)
 
-        if len(lats) == 0:
-            # No ridges at this time
-            return np.zeros((0, 3))
+        # Evict oldest if over capacity
+        while len(self._cache) > self.max_cache_size:
+            self._cache.popitem(last=False)
 
-        # Convert to XYZ
-        latlon = np.column_stack([lats, lons])
-        return LatLon2XYZ(latlon)
-
-    def _compute_subduction(self, time: float) -> np.ndarray:
-        """Compute subduction zone locations at time and convert to XYZ."""
-        _, subduction_segments = _get_ridge_subduction_locations(
-            time, self.topology_features, self.rotation_model
-        )
-
-        # Convert segments to points at desired resolution
-        lats, lons = Segments2Points(subduction_segments, self.subduction_resolution)
-
-        if len(lats) == 0:
-            # No subduction zones at this time
-            return np.zeros((0, 3))
-
-        # Convert to XYZ
-        latlon = np.column_stack([lats, lons])
-        return LatLon2XYZ(latlon)
+        return resolved_topologies, shared_boundary_sections
 
     def clear(self):
-        """Clear all cached data."""
-        self._ridge_cache.clear()
-        self._subduction_cache.clear()
+        """Clear the cache."""
+        self._cache.clear()
 
-    def get_memory_usage(self) -> Dict[str, int]:
-        """
-        Get approximate memory usage of cached data.
-
-        Returns
-        -------
-        dict
-            Dictionary with 'ridges_mb', 'subduction_mb', and 'total_mb'
-        """
-        ridge_bytes = sum(arr.nbytes for arr in self._ridge_cache.values())
-        subduction_bytes = sum(arr.nbytes for arr in self._subduction_cache.values())
-
+    def get_memory_usage(self) -> Dict[str, float]:
+        """Get approximate memory usage information."""
         return {
-            'ridges_mb': ridge_bytes / (1024 * 1024),
-            'subduction_mb': subduction_bytes / (1024 * 1024),
-            'total_mb': (ridge_bytes + subduction_bytes) / (1024 * 1024),
-            'num_timesteps_cached': len(self._ridge_cache),
+            'cached_timesteps': len(self._cache),
+            'max_cache_size': self.max_cache_size,
         }
 
 
-def _get_ridge_subduction_locations(
+class ContinentalPolygonCache:
+    """
+    Cache for reconstructed continental polygons with efficient point-in-polygon queries.
+
+    Parameters
+    ----------
+    continental_polygons : str or pygplates.FeatureCollection
+        Continental polygon features.
+    rotation_model : pygplates.RotationModel
+        Rotation model for reconstruction.
+    max_cache_size : int, default=10
+        Maximum number of timesteps to cache.
+    """
+
+    def __init__(
+        self,
+        continental_polygons,
+        rotation_model: pygplates.RotationModel,
+        max_cache_size: int = 10,
+    ):
+        # Load continental polygons
+        if isinstance(continental_polygons, str):
+            self._polygon_features = pygplates.FeatureCollection(continental_polygons)
+        else:
+            self._polygon_features = continental_polygons
+
+        self.rotation_model = rotation_model
+        self.max_cache_size = max_cache_size
+
+        # LRU cache: {time: list of reconstructed polygon geometries}
+        self._cache: OrderedDict = OrderedDict()
+
+    def get_polygons(self, time: float) -> List[pygplates.PolygonOnSphere]:
+        """
+        Get reconstructed continental polygons at a time.
+
+        Parameters
+        ----------
+        time : float
+            Geological time (Ma).
+
+        Returns
+        -------
+        list of pygplates.PolygonOnSphere
+            Reconstructed continental polygon geometries.
+        """
+        if time in self._cache:
+            self._cache.move_to_end(time)
+            return self._cache[time]
+
+        # Reconstruct polygons
+        reconstructed = []
+        pygplates.reconstruct(
+            self._polygon_features,
+            self.rotation_model,
+            reconstructed,
+            time,
+        )
+
+        # Extract polygon geometries
+        polygon_geometries = []
+        for rfg in reconstructed:
+            geom = rfg.get_reconstructed_geometry()
+            if isinstance(geom, pygplates.PolygonOnSphere):
+                polygon_geometries.append(geom)
+
+        # Cache
+        self._cache[time] = polygon_geometries
+
+        # Evict oldest if over capacity
+        while len(self._cache) > self.max_cache_size:
+            self._cache.popitem(last=False)
+
+        return polygon_geometries
+
+    def get_continental_mask(
+        self,
+        lats: np.ndarray,
+        lons: np.ndarray,
+        time: float,
+    ) -> np.ndarray:
+        """
+        Get boolean mask indicating which points are inside continental polygons.
+
+        Uses ptt.utils.points_in_polygons.find_polygons for efficient vectorized
+        point-in-polygon testing with spatial tree acceleration.
+
+        Parameters
+        ----------
+        lats : np.ndarray
+            Point latitudes in degrees.
+        lons : np.ndarray
+            Point longitudes in degrees.
+        time : float
+            Geological time (Ma).
+
+        Returns
+        -------
+        np.ndarray
+            Boolean array, True for points inside continental polygons.
+        """
+        polygons = self.get_polygons(time)
+
+        if len(polygons) == 0:
+            return np.zeros(len(lats), dtype=bool)
+
+        # Create all points in single C++ call using MultiPointOnSphere
+        points = pygplates.MultiPointOnSphere(zip(lats, lons)).get_points()
+
+        # Use vectorized point-in-polygon with spatial tree (C++ backend)
+        containing_polygons = ptt.utils.points_in_polygons.find_polygons(
+            points, polygons, all_polygons=False
+        )
+
+        # Convert to boolean mask: True if point is in any polygon
+        mask = np.array([p is not None for p in containing_polygons], dtype=bool)
+
+        return mask
+
+    def clear(self):
+        """Clear the cache."""
+        self._cache.clear()
+
+
+def extract_ridge_geometries(
     time: float,
     topology_features,
-    rotation_model
-) -> Tuple[np.ndarray, np.ndarray]:
+    rotation_model: pygplates.RotationModel,
+) -> List[pygplates.PolylineOnSphere]:
     """
-    Extract mid-ocean ridge and subduction zone locations at a given time.
-
-    This is the core function extracted from TracTec.py that resolves
-    plate topologies and identifies boundary types.
+    Extract mid-ocean ridge geometries at a given time.
 
     Parameters
     ----------
     time : float
-        Reconstruction time in Ma
-    topology_features : pygplates.FeatureCollection
-        Plate topology features
+        Geological time (Ma).
+    topology_features : pygplates.FeatureCollection or list
+        Topology features.
     rotation_model : pygplates.RotationModel
-        Rotation model
+        Rotation model.
 
     Returns
     -------
-    ridge_segments : np.ndarray
-        Array of shape (N, 4) with [lat0, lon0, lat1, lon1] for ridges
-    subduction_segments : np.ndarray
-        Array of shape (M, 4) with [lat0, lon0, lat1, lon1] for subduction zones
+    list of pygplates.PolylineOnSphere
+        Ridge geometries at the specified time.
     """
-    # Resolve topologies at the current time
     resolved_topologies = []
     shared_boundary_sections = []
     pygplates.resolve_topologies(
@@ -217,66 +246,150 @@ def _get_ridge_subduction_locations(
         rotation_model,
         resolved_topologies,
         time,
-        shared_boundary_sections
+        shared_boundary_sections,
     )
 
-    # Accumulate ridge and subduction zone locations
-    ridge_lats0 = np.array([])
-    ridge_lons0 = np.array([])
-    ridge_lats1 = np.array([])
-    ridge_lons1 = np.array([])
-    subduction_lats0 = np.array([])
-    subduction_lons0 = np.array([])
-    subduction_lats1 = np.array([])
-    subduction_lons1 = np.array([])
-
-    # Iterate over shared boundary sections
+    ridge_geometries = []
     for shared_boundary_section in shared_boundary_sections:
-
-        # Check if segment is mid-ocean ridge
-        if shared_boundary_section.get_feature().get_feature_type() == \
-                pygplates.FeatureType.gpml_mid_ocean_ridge:
-
-            # Iterate over shared sub-segments
+        if (
+            shared_boundary_section.get_feature().get_feature_type()
+            == pygplates.FeatureType.create_gpml("MidOceanRidge")
+        ):
             for shared_sub_segment in shared_boundary_section.get_shared_sub_segments():
-                lat_lon = shared_sub_segment.get_resolved_geometry().to_lat_lon_array()
-                lats = lat_lon[:, 0]
-                lons = lat_lon[:, 1]
+                ridge_geometries.append(shared_sub_segment.get_resolved_geometry())
 
-                ridge_lats0 = np.append(ridge_lats0, lats[:-1])
-                ridge_lats1 = np.append(ridge_lats1, lats[1:])
-                ridge_lons0 = np.append(ridge_lons0, lons[:-1])
-                ridge_lons1 = np.append(ridge_lons1, lons[1:])
+    return ridge_geometries
 
-        # Check if segment is subduction zone
-        if shared_boundary_section.get_feature().get_feature_type() == \
-                pygplates.FeatureType.gpml_subduction_zone:
 
-            # Iterate over shared sub-segments
+def extract_ridge_points_latlon(
+    time: float,
+    topology_features,
+    rotation_model: pygplates.RotationModel,
+    tessellate_degrees: float = 0.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Extract mid-ocean ridge points as lat/lon arrays.
+
+    Parameters
+    ----------
+    time : float
+        Geological time (Ma).
+    topology_features : pygplates.FeatureCollection or list
+        Topology features.
+    rotation_model : pygplates.RotationModel
+        Rotation model.
+    tessellate_degrees : float, default=0.5
+        Tessellation resolution in degrees.
+
+    Returns
+    -------
+    lats : np.ndarray
+        Ridge point latitudes in degrees.
+    lons : np.ndarray
+        Ridge point longitudes in degrees.
+    """
+    ridge_geometries = extract_ridge_geometries(time, topology_features, rotation_model)
+
+    if len(ridge_geometries) == 0:
+        return np.array([]), np.array([])
+
+    all_lats = []
+    all_lons = []
+
+    for geom in ridge_geometries:
+        tessellated = geom.to_tessellated(np.radians(tessellate_degrees))
+        for point in tessellated:
+            lat, lon = point.to_lat_lon()
+            all_lats.append(lat)
+            all_lons.append(lon)
+
+    return np.array(all_lats), np.array(all_lons)
+
+
+def extract_subduction_geometries(
+    time: float,
+    topology_features,
+    rotation_model: pygplates.RotationModel,
+) -> List[pygplates.PolylineOnSphere]:
+    """
+    Extract subduction zone geometries at a given time.
+
+    Parameters
+    ----------
+    time : float
+        Geological time (Ma).
+    topology_features : pygplates.FeatureCollection or list
+        Topology features.
+    rotation_model : pygplates.RotationModel
+        Rotation model.
+
+    Returns
+    -------
+    list of pygplates.PolylineOnSphere
+        Subduction zone geometries at the specified time.
+    """
+    resolved_topologies = []
+    shared_boundary_sections = []
+    pygplates.resolve_topologies(
+        topology_features,
+        rotation_model,
+        resolved_topologies,
+        time,
+        shared_boundary_sections,
+    )
+
+    subduction_geometries = []
+    for shared_boundary_section in shared_boundary_sections:
+        feature_type = shared_boundary_section.get_feature().get_feature_type()
+        if feature_type == pygplates.FeatureType.create_gpml("SubductionZone"):
             for shared_sub_segment in shared_boundary_section.get_shared_sub_segments():
-                lat_lon = shared_sub_segment.get_resolved_geometry().to_lat_lon_array()
-                lats = lat_lon[:, 0]
-                lons = lat_lon[:, 1]
+                subduction_geometries.append(shared_sub_segment.get_resolved_geometry())
 
-                subduction_lats0 = np.append(subduction_lats0, lats[:-1])
-                subduction_lats1 = np.append(subduction_lats1, lats[1:])
-                subduction_lons0 = np.append(subduction_lons0, lons[:-1])
-                subduction_lons1 = np.append(subduction_lons1, lons[1:])
+    return subduction_geometries
 
-    # Build segment arrays
-    ridge_segments = np.zeros([len(ridge_lons0), 4])
-    subduction_segments = np.zeros([len(subduction_lons0), 4])
 
-    if len(ridge_lons0) > 0:
-        ridge_segments[:, 0] = ridge_lats0
-        ridge_segments[:, 1] = ridge_lons0
-        ridge_segments[:, 2] = ridge_lats1
-        ridge_segments[:, 3] = ridge_lons1
+def extract_subduction_points_latlon(
+    time: float,
+    topology_features,
+    rotation_model: pygplates.RotationModel,
+    tessellate_degrees: float = 0.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Extract subduction zone points as lat/lon arrays.
 
-    if len(subduction_lons0) > 0:
-        subduction_segments[:, 0] = subduction_lats0
-        subduction_segments[:, 1] = subduction_lons0
-        subduction_segments[:, 2] = subduction_lats1
-        subduction_segments[:, 3] = subduction_lons1
+    Parameters
+    ----------
+    time : float
+        Geological time (Ma).
+    topology_features : pygplates.FeatureCollection or list
+        Topology features.
+    rotation_model : pygplates.RotationModel
+        Rotation model.
+    tessellate_degrees : float, default=0.5
+        Tessellation resolution in degrees.
 
-    return ridge_segments, subduction_segments
+    Returns
+    -------
+    lats : np.ndarray
+        Subduction zone point latitudes in degrees.
+    lons : np.ndarray
+        Subduction zone point longitudes in degrees.
+    """
+    subduction_geometries = extract_subduction_geometries(
+        time, topology_features, rotation_model
+    )
+
+    if len(subduction_geometries) == 0:
+        return np.array([]), np.array([])
+
+    all_lats = []
+    all_lons = []
+
+    for geom in subduction_geometries:
+        tessellated = geom.to_tessellated(np.radians(tessellate_degrees))
+        for point in tessellated:
+            lat, lon = point.to_lat_lon()
+            all_lats.append(lat)
+            all_lons.append(lon)
+
+    return np.array(all_lats), np.array(all_lons)

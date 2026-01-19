@@ -95,10 +95,26 @@ class PointCloud:
         -------
         np.ndarray
             Array of shape (N, 2) with [lat, lon] in degrees.
+            Latitude: -90 to 90, Longitude: -180 to 180.
         """
         from .geometry import XYZ2LatLon
         lats, lons = XYZ2LatLon(self.xyz)
         return np.column_stack([lats, lons])
+
+    @property
+    def lonlat(self) -> np.ndarray:
+        """
+        Get lon/lat coordinates (computed from XYZ).
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (N, 2) with [lon, lat] in degrees.
+            Longitude: -180 to 180, Latitude: -90 to 90.
+        """
+        from .geometry import XYZ2LatLon
+        lats, lons = XYZ2LatLon(self.xyz)
+        return np.column_stack([lons, lats])
 
     @classmethod
     def from_latlon(
