@@ -10,7 +10,6 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-    {name = "Krister S. Karlsen"},
     {name = "S. Ghelichkhani"},
 ]
 keywords = ["plate tectonics", "seafloor age", "geodynamics", "pygplates", "lithosphere", "kinematics"]

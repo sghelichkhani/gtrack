@@ -6,29 +6,35 @@ repo_name: sghelichkhani/gtrack
 
 theme:
   name: material
-  palette:
-    - scheme: default
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    - scheme: slate
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
   features:
-    - navigation.sections
-    - navigation.top
+    - announce.dismiss
     - content.code.copy
+    - navigation.indexes
+    - navigation.tabs
+    - toc.integrate
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.details
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - toc:
+      toc_depth: 3
 
 plugins:
   - search
   - mkdocs-jupyter:
       include_source: true
-      execute: false  # Notebooks are pre-executed
+      execute: false
   - mkdocstrings:
       handlers:
         python:
@@ -41,20 +47,14 @@ plugins:
             docstring_style: numpy
             show_signature_annotations: true
 
-markdown_extensions:
-  - pymdownx.highlight:
-      anchor_linenums: true
-  - pymdownx.superfences
-  - admonition
-  - pymdownx.details
-  - toc:
-      permalink: true
-
 nav:
-  - Home: index.md
+  - Home:
+      - index.md
+      - About: about.md
   - Getting Started: getting-started.md
   - Demos:
-      - Simple Example: demos/seafloor_age_simple.ipynb
-      - Stepwise Example: demos/seafloor_age_stepwise.ipynb
+      - demos/index.md
+      - Seafloor Age (Simple): demos/seafloor_age_simple.ipynb
+      - Seafloor Age (Stepwise): demos/seafloor_age_stepwise.ipynb
       - Continental Rotation: demos/continental_rotation.ipynb
   - API Reference: api.md
