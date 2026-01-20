@@ -515,60 +515,90 @@ class SeafloorAgeTracker:
             properties={'age': self._ages.copy()}
         )
 
-    def reinitialize_to_mesh(
+    def reinitialize(
         self,
         refinement_levels: Optional[int] = None,
-        k_neighbors: Optional[int] = None,
-        max_distance: Optional[float] = None,
-    ) -> int:
+        max_distance_km: Optional[float] = None,
+        k_neighbors: int = 3,
+    ) -> PointCloud:
         """
-        Reinitialize all points to icosahedral mesh via weighted interpolation.
+        Reinitialize the tracer field with a new icosahedral mesh.
 
-        This creates a new icosahedral mesh and interpolates ages from the
-        current points using inverse distance weighting.
+        Generates a fresh icosahedral mesh and interpolates ages from existing
+        tracers using inverse distance weighting. Points without nearby tracers
+        (beyond max_distance_km) are dropped.
+
+        This is useful for resampling the ocean when point density becomes
+        uneven due to spreading patterns. The reinitialized points will be
+        assigned plate IDs during the next step_to() call.
 
         Parameters
         ----------
         refinement_levels : int, optional
-            Mesh refinement level. If None, uses config default.
-        k_neighbors : int, optional
-            Number of nearest neighbors for interpolation. If None, uses config default.
-        max_distance : float, optional
-            Maximum distance (meters) for valid neighbors. If None, uses config default.
+            Mesh refinement level. If None, uses config.default_refinement_levels.
+        max_distance_km : float, optional
+            Maximum distance in kilometers to search for neighbors. Points with
+            no neighbors within this distance are dropped (no age data means gap).
+            If None, calculated as 2× the mesh spacing for the given refinement level.
+        k_neighbors : int, default=3
+            Number of nearest neighbors for inverse distance weighting.
+            Use k_neighbors=1 for simple nearest-neighbor interpolation.
 
         Returns
         -------
-        int
-            Number of points in new mesh.
+        PointCloud
+            The reinitialized point cloud with interpolated ages.
+
+        Raises
+        ------
+        RuntimeError
+            If tracker is not initialized.
+        ValueError
+            If all points are filtered out (max_distance_km too small or no data).
+
+        Examples
+        --------
+        >>> tracker.initialize(starting_age=200)
+        >>> tracker.step_to(150)
+        >>> # Reinitialize with higher resolution mesh
+        >>> cloud = tracker.reinitialize(refinement_levels=6)
+        >>> tracker.step_to(100)  # Continue time-stepping
         """
         if not self._initialized:
-            raise RuntimeError("Must initialize first before reinitializing to mesh")
+            raise RuntimeError(
+                "Must call initialize() or initialize_from_cloud() before reinitialize()"
+            )
 
         from scipy.spatial import cKDTree
+        from .geometry import inverse_distance_weighted_interpolation, compute_mesh_spacing_km
 
+        # Set defaults
         if refinement_levels is None:
             refinement_levels = self._config.default_refinement_levels
-        if k_neighbors is None:
-            k_neighbors = self._config.reinit_k_neighbors
-        if max_distance is None:
-            max_distance = self._config.reinit_max_distance
 
-        logger.info(f"Reinitializing to icosahedral mesh (level {refinement_levels})...")
+        if max_distance_km is None:
+            # Default: 2× mesh spacing
+            max_distance_km = 2.0 * compute_mesh_spacing_km(refinement_levels)
 
-        # Create new mesh
+        # Convert max_distance to meters for KDTree queries
+        max_distance_m = max_distance_km * 1000.0
+
+        logger.info(
+            f"Reinitializing to icosahedral mesh (level {refinement_levels}, "
+            f"max_distance={max_distance_km:.1f} km, k={k_neighbors})..."
+        )
+
+        # Check we have existing points
+        if len(self._lats) == 0:
+            raise ValueError("No existing tracers to interpolate from")
+
+        # Create new icosahedral mesh
         mesh_lats, mesh_lons = create_icosahedral_mesh_latlon(refinement_levels)
+        n_mesh = len(mesh_lats)
+        logger.debug(f"  Created mesh with {n_mesh} points")
 
-        # Filter out continental points
-        if self._continental_cache is not None:
-            continental_mask = self._continental_cache.get_continental_mask(
-                mesh_lats, mesh_lons, self._current_age
-            )
-            ocean_mask = ~continental_mask
-            mesh_lats = mesh_lats[ocean_mask]
-            mesh_lons = mesh_lons[ocean_mask]
-
-        # Convert current points to XYZ for KDTree
-        def latlon_to_xyz(lats, lons, r=1.0):
+        # Helper function for lat/lon to XYZ conversion
+        def latlon_to_xyz(lats, lons, r):
             lats_rad = np.radians(lats)
             lons_rad = np.radians(lons)
             x = r * np.cos(lats_rad) * np.cos(lons_rad)
@@ -576,46 +606,95 @@ class SeafloorAgeTracker:
             z = r * np.sin(lats_rad)
             return np.column_stack([x, y, z])
 
+        # Convert to XYZ for KDTree
         current_xyz = latlon_to_xyz(self._lats, self._lons, self._config.earth_radius)
         mesh_xyz = latlon_to_xyz(mesh_lats, mesh_lons, self._config.earth_radius)
 
-        # Build KDTree and query
+        # Build KDTree from existing tracers
         tree = cKDTree(current_xyz)
-        distances, indices = tree.query(mesh_xyz, k=k_neighbors)
 
-        # Interpolate ages using inverse distance weighting
-        new_ages = np.zeros(len(mesh_lats))
-        valid_mask = np.ones(len(mesh_lats), dtype=bool)
+        # Handle case where k_neighbors > number of existing points
+        k = min(k_neighbors, len(self._lats))
 
-        for i in range(len(mesh_lats)):
-            dists = distances[i]
-            idxs = indices[i]
+        # Query K nearest neighbors for each mesh point
+        distances, indices = tree.query(mesh_xyz, k=k)
 
-            # Filter by max distance
-            valid = dists < max_distance
-            if not valid.any():
-                valid_mask[i] = False
-                continue
+        # Ensure 2D arrays even for k=1
+        if k == 1:
+            distances = distances.reshape(-1, 1)
+            indices = indices.reshape(-1, 1)
 
-            dists = dists[valid]
-            idxs = idxs[valid]
+        # Determine which mesh points have valid neighbors (within max_distance)
+        # A point is valid if at least one neighbor is within max_distance
+        min_distances = distances[:, 0]  # Distance to nearest neighbor
+        valid_mask = min_distances < max_distance_m
 
-            # Inverse distance weighting
-            if len(dists) == 1 or dists[0] < 1e-10:
-                # Exact match or single point
-                new_ages[i] = self._ages[idxs[0]]
-            else:
-                weights = 1.0 / dists
-                weights /= weights.sum()
-                new_ages[i] = np.sum(weights * self._ages[idxs])
+        n_valid = valid_mask.sum()
+        if n_valid == 0:
+            raise ValueError(
+                f"All mesh points filtered out. No existing tracers within "
+                f"{max_distance_km:.1f} km of any mesh point. "
+                f"Try increasing max_distance_km or check tracer distribution."
+            )
 
-        # Update state
-        self._lats = mesh_lats[valid_mask]
-        self._lons = mesh_lons[valid_mask]
-        self._ages = new_ages[valid_mask]
+        logger.debug(f"  {n_valid}/{n_mesh} mesh points have nearby tracers")
+
+        # Filter to valid points only
+        valid_mesh_lats = mesh_lats[valid_mask]
+        valid_mesh_lons = mesh_lons[valid_mask]
+        valid_distances = distances[valid_mask]
+        valid_indices = indices[valid_mask]
+
+        # For IDW, only use neighbors within max_distance
+        # Build values array from ages
+        ages_for_interp = np.zeros_like(valid_distances)
+        for i in range(n_valid):
+            ages_for_interp[i] = self._ages[valid_indices[i]]
+
+        # Mask out neighbors beyond max_distance (set distance to inf so they get zero weight)
+        beyond_threshold = valid_distances >= max_distance_m
+        valid_distances_masked = valid_distances.copy()
+        valid_distances_masked[beyond_threshold] = np.inf
+
+        # Compute IDW interpolation
+        new_ages = inverse_distance_weighted_interpolation(ages_for_interp, valid_distances_masked)
+
+        # Update internal state
+        self._lats = valid_mesh_lats
+        self._lons = valid_mesh_lons
+        self._ages = new_ages
 
         logger.info(f"  Reinitialized to {len(self._lats)} points")
 
+        return self.get_current_state()
+
+    # Keep old name as alias for backwards compatibility
+    def reinitialize_to_mesh(
+        self,
+        refinement_levels: Optional[int] = None,
+        k_neighbors: Optional[int] = None,
+        max_distance: Optional[float] = None,
+    ) -> int:
+        """
+        Deprecated: Use reinitialize() instead.
+
+        This method is kept for backwards compatibility.
+        """
+        import warnings
+        warnings.warn(
+            "reinitialize_to_mesh() is deprecated, use reinitialize() instead",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        # Convert max_distance from meters to km for new API
+        max_distance_km = max_distance / 1000.0 if max_distance is not None else None
+        k = k_neighbors if k_neighbors is not None else 3
+
+        self.reinitialize(
+            refinement_levels=refinement_levels,
+            max_distance_km=max_distance_km,
+            k_neighbors=k,
+        )
         return len(self._lats)
 
     @property

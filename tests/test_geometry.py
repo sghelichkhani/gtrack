@@ -8,6 +8,8 @@ from gtrack.geometry import (
     RefineGreatCircleArcSegment,
     Segments2Points,
     normalize_to_sphere,
+    inverse_distance_weighted_interpolation,
+    compute_mesh_spacing_km,
     EARTH_RADIUS,
 )
 
@@ -219,6 +221,115 @@ class TestNormalization:
 
         distance = np.linalg.norm(normalized[0])
         np.testing.assert_allclose(distance, EARTH_RADIUS, rtol=1e-10)
+
+
+class TestIDWInterpolation:
+    """Test inverse distance weighted interpolation."""
+
+    def test_idw_basic(self):
+        """Test basic IDW interpolation."""
+        # Two neighbors with values 10 and 20 at distances 1 and 2
+        values = np.array([[10, 20]])
+        distances = np.array([[1.0, 2.0]])
+        result = inverse_distance_weighted_interpolation(values, distances)
+
+        # Expected: (10/1 + 20/2) / (1/1 + 1/2) = 20 / 1.5 = 13.33
+        expected = 20.0 / 1.5
+        np.testing.assert_allclose(result[0], expected, rtol=1e-10)
+
+    def test_idw_equal_distances(self):
+        """Test IDW with equal distances (simple average)."""
+        values = np.array([[10, 20, 30]])
+        distances = np.array([[1.0, 1.0, 1.0]])
+        result = inverse_distance_weighted_interpolation(values, distances)
+
+        # Equal distances means simple average
+        expected = 20.0
+        np.testing.assert_allclose(result[0], expected, rtol=1e-10)
+
+    def test_idw_zero_distance(self):
+        """Test IDW with zero distance (exact match)."""
+        values = np.array([[10, 20, 30]])
+        distances = np.array([[0.0, 1.0, 2.0]])
+        result = inverse_distance_weighted_interpolation(values, distances)
+
+        # Zero distance means use that value directly
+        expected = 10.0
+        np.testing.assert_allclose(result[0], expected, rtol=1e-10)
+
+    def test_idw_single_neighbor(self):
+        """Test IDW with single neighbor (k=1)."""
+        values = np.array([[42]])
+        distances = np.array([[5.0]])
+        result = inverse_distance_weighted_interpolation(values, distances)
+
+        expected = 42.0
+        np.testing.assert_allclose(result[0], expected, rtol=1e-10)
+
+    def test_idw_multiple_points(self):
+        """Test IDW with multiple query points."""
+        values = np.array([
+            [10, 20],
+            [30, 40],
+            [50, 60],
+        ])
+        distances = np.array([
+            [1.0, 2.0],
+            [1.0, 1.0],
+            [2.0, 1.0],
+        ])
+        result = inverse_distance_weighted_interpolation(values, distances)
+
+        assert result.shape == (3,)
+        # Point 1: (10/1 + 20/2) / (1 + 0.5) = 20/1.5 = 13.33
+        # Point 2: (30 + 40) / 2 = 35
+        # Point 3: (50/2 + 60/1) / (0.5 + 1) = 85/1.5 = 56.67
+        np.testing.assert_allclose(result[0], 20.0 / 1.5, rtol=1e-10)
+        np.testing.assert_allclose(result[1], 35.0, rtol=1e-10)
+        np.testing.assert_allclose(result[2], 85.0 / 1.5, rtol=1e-10)
+
+    def test_idw_inf_distance(self):
+        """Test IDW with infinite distance (effectively zero weight)."""
+        values = np.array([[10, 20, 30]])
+        distances = np.array([[1.0, np.inf, np.inf]])
+        result = inverse_distance_weighted_interpolation(values, distances)
+
+        # Only first value should contribute (others have zero weight)
+        expected = 10.0
+        np.testing.assert_allclose(result[0], expected, rtol=1e-10)
+
+
+class TestMeshSpacing:
+    """Test mesh spacing calculation."""
+
+    def test_mesh_spacing_level_0(self):
+        """Test mesh spacing at refinement level 0 (12 points)."""
+        spacing = compute_mesh_spacing_km(0)
+        # 12 points on Earth: spacing should be ~6500 km
+        assert 5000 < spacing < 8000
+
+    def test_mesh_spacing_level_5(self):
+        """Test mesh spacing at refinement level 5 (~10k points)."""
+        spacing = compute_mesh_spacing_km(5)
+        # Level 5 has ~10,242 points, spacing ~220 km
+        assert 150 < spacing < 300
+
+    def test_mesh_spacing_decreases_with_level(self):
+        """Test that mesh spacing decreases with higher refinement."""
+        spacing_4 = compute_mesh_spacing_km(4)
+        spacing_5 = compute_mesh_spacing_km(5)
+        spacing_6 = compute_mesh_spacing_km(6)
+
+        assert spacing_4 > spacing_5 > spacing_6
+
+    def test_mesh_spacing_halves_per_level(self):
+        """Test that spacing roughly halves per refinement level."""
+        spacing_4 = compute_mesh_spacing_km(4)
+        spacing_5 = compute_mesh_spacing_km(5)
+
+        # Each level multiplies points by 4, so spacing should halve
+        ratio = spacing_4 / spacing_5
+        np.testing.assert_allclose(ratio, 2.0, rtol=0.1)
 
 
 if __name__ == "__main__":

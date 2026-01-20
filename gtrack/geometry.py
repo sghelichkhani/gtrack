@@ -213,3 +213,98 @@ def normalize_to_sphere(xyz, radius=None):
 
     magnitudes = np.linalg.norm(xyz, axis=1, keepdims=True)
     return (xyz / magnitudes) * radius
+
+
+def inverse_distance_weighted_interpolation(values, distances, epsilon=1e-10):
+    """
+    Compute inverse distance weighted (IDW) interpolation.
+
+    For each query point, computes a weighted average of neighbor values
+    where weights are inversely proportional to distance.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        Array of shape (N, K) containing values from K neighbors for N points.
+    distances : np.ndarray
+        Array of shape (N, K) containing distances to K neighbors for N points.
+    epsilon : float, default=1e-10
+        Small value to detect zero distances. Points with distance < epsilon
+        are treated as exact matches and their value is used directly.
+
+    Returns
+    -------
+    result : np.ndarray
+        Array of shape (N,) containing interpolated values.
+
+    Notes
+    -----
+    For points where any neighbor has distance < epsilon (essentially zero),
+    the value from that neighbor is used directly to avoid division by zero.
+
+    The IDW formula is: result = sum(v_i / d_i) / sum(1 / d_i)
+
+    Examples
+    --------
+    >>> values = np.array([[10, 20], [30, 40]])
+    >>> distances = np.array([[1.0, 2.0], [1.0, 1.0]])
+    >>> result = inverse_distance_weighted_interpolation(values, distances)
+    >>> # First point: (10/1 + 20/2) / (1/1 + 1/2) = 20/1.5 = 13.33
+    >>> # Second point: (30/1 + 40/1) / (1/1 + 1/1) = 70/2 = 35
+    """
+    values = np.atleast_2d(values)
+    distances = np.atleast_2d(distances)
+
+    n_points = values.shape[0]
+    result = np.zeros(n_points)
+
+    # Handle each point
+    for i in range(n_points):
+        dists = distances[i]
+        vals = values[i]
+
+        # Check for zero distance (exact match)
+        zero_mask = dists < epsilon
+        if np.any(zero_mask):
+            # Use the value from the first zero-distance neighbor
+            zero_idx = np.argmax(zero_mask)
+            result[i] = vals[zero_idx]
+        else:
+            # Standard IDW: w_i = 1/d_i
+            weights = 1.0 / dists
+            result[i] = np.sum(vals * weights) / np.sum(weights)
+
+    return result
+
+
+def compute_mesh_spacing_km(refinement_levels, earth_radius_km=6378.1):
+    """
+    Compute approximate mesh spacing for an icosahedral mesh.
+
+    Parameters
+    ----------
+    refinement_levels : int
+        Number of icosahedral mesh refinement levels.
+    earth_radius_km : float, default=6378.1
+        Earth's radius in kilometers.
+
+    Returns
+    -------
+    spacing_km : float
+        Approximate average spacing between mesh points in kilometers.
+
+    Notes
+    -----
+    The icosahedral mesh at refinement level L has N = 10 * 4^L + 2 points.
+    Average area per point = 4 * pi * R^2 / N
+    Approximate spacing = sqrt(area per point)
+
+    Examples
+    --------
+    >>> spacing = compute_mesh_spacing_km(5)
+    >>> 200 < spacing < 300  # Level 5 has ~220 km spacing
+    True
+    """
+    n_points = 10 * (4 ** refinement_levels) + 2
+    avg_area = 4 * np.pi * earth_radius_km**2 / n_points
+    return np.sqrt(avg_area)
