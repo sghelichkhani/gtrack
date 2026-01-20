@@ -53,7 +53,7 @@ def _find_neighbours(point: np.ndarray, all_points: np.ndarray) -> list:
             elif min_distance is None or dist < min_distance:
                 min_distance = dist
                 neighbours = [idx]
-    assert len(neighbours) == 5
+    assert len(neighbours) in (5, 6)
     return neighbours
 
 
