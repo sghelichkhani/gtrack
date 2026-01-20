@@ -47,7 +47,7 @@ def _find_neighbours(point: np.ndarray, all_points: np.ndarray) -> list:
             math.radians(point[0]), math.radians(point[1]),
             math.radians(p[0]), math.radians(p[1])
         )
-        if dist > 0:
+        if dist > 1e-6:  # Skip self (floating-point may give tiny non-zero distance)
             if min_distance is not None and math.isclose(min_distance, dist, rel_tol=1e-9, abs_tol=1e-3):
                 neighbours.append(idx)
             elif min_distance is None or dist < min_distance:

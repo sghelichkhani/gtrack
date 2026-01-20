@@ -1,6 +1,11 @@
 name: CI
 
 on:
+  # Run on push to any branch
+  push:
+    branches:
+      - '**'
+
   # Run on pull requests to any branch
   pull_request:
     branches:
