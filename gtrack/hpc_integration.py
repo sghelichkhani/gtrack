@@ -77,6 +77,8 @@ class SeafloorAgeTracker:
         config: Optional[TracerConfig] = None,
         verbose: bool = True,
     ):
+        from .geometry import ensure_list
+
         self._config = config if config else TracerConfig()
 
         # Handle deprecated verbose flag
@@ -84,11 +86,9 @@ class SeafloorAgeTracker:
             from .logging import enable_verbose
             enable_verbose()
 
-        # Ensure lists
-        if isinstance(rotation_files, str):
-            rotation_files = [rotation_files]
-        if isinstance(topology_files, str):
-            topology_files = [topology_files]
+        # Handle single file or Path as list
+        rotation_files = ensure_list(rotation_files)
+        topology_files = ensure_list(topology_files)
 
         self._rotation_files = rotation_files
         self._topology_files = topology_files

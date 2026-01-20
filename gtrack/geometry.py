@@ -4,11 +4,51 @@ Geometric utility functions for coordinate transformations and operations on a s
 All functions are vectorized using numpy for performance.
 """
 
+from pathlib import Path
+
 import numpy as np
 
 
 # Earth's radius in meters
 EARTH_RADIUS = 6.3781e6
+
+
+def ensure_list(x):
+    """
+    Ensure x is a list. Wrap single items (str, Path) in a list.
+
+    This is useful for APIs that accept either a single file path or a list
+    of file paths, allowing users to write either:
+        - rotation_files="rotations.rot"
+        - rotation_files=["rot1.rot", "rot2.rot"]
+
+    Parameters
+    ----------
+    x : str, Path, list, or None
+        Input to convert to a list.
+
+    Returns
+    -------
+    list
+        The input as a list. Single str/Path items are wrapped in a list.
+        None returns an empty list.
+
+    Examples
+    --------
+    >>> ensure_list("file.rot")
+    ['file.rot']
+    >>> ensure_list(Path("file.rot"))
+    [PosixPath('file.rot')]
+    >>> ensure_list(["file1.rot", "file2.rot"])
+    ['file1.rot', 'file2.rot']
+    >>> ensure_list(None)
+    []
+    """
+    if x is None:
+        return []
+    if isinstance(x, (str, Path)):
+        return [x]
+    return list(x)
 
 
 def LatLon2XYZ(latlon):

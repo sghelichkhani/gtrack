@@ -485,18 +485,16 @@ class PointRotator:
         static_polygons: Optional[str] = None
     ):
         import pygplates
+        from .geometry import ensure_list
 
-        # Ensure rotation_files is a list
-        if isinstance(rotation_files, str):
-            rotation_files = [rotation_files]
+        # Handle single file or Path as list
+        rotation_files = ensure_list(rotation_files)
+        topology_files = ensure_list(topology_files)
 
         self.rotation_model = pygplates.RotationModel(rotation_files)
 
         # Load topology features if provided
-        if topology_files is not None:
-            if isinstance(topology_files, str):
-                topology_files = [topology_files]
-
+        if topology_files:
             self.topology_features = pygplates.FeatureCollection()
             for file in topology_files:
                 features = pygplates.FeatureCollection(file)

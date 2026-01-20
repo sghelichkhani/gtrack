@@ -47,12 +47,11 @@ class PolygonFilter:
         rotation_files: Union[str, List[str]]
     ):
         import pygplates
+        from .geometry import ensure_list
 
-        # Handle single file as list
-        if isinstance(polygon_files, str):
-            polygon_files = [polygon_files]
-        if isinstance(rotation_files, str):
-            rotation_files = [rotation_files]
+        # Handle single file or Path as list
+        polygon_files = ensure_list(polygon_files)
+        rotation_files = ensure_list(rotation_files)
 
         self.rotation_model = pygplates.RotationModel(rotation_files)
 
