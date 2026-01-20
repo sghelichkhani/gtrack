@@ -37,6 +37,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[docs,demos]"
 
+      - name: Install Jupyter kernel
+        run: python -m ipykernel install --user --name python3
+
       - name: Download plate model data
         working-directory: examples
         run: make data
