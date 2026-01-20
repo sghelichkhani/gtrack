@@ -1,1 +1,5 @@
-__pycache__/site/
+__pycache__/
+site/
+
+# Generated notebooks (created by CI from examples/*.py)
+docs/demos/*.ipynb
