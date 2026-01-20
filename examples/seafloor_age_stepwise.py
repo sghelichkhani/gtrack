@@ -1,16 +1,17 @@
-# Stepwise Seafloor Age Computation with tractec
+# Stepwise Seafloor Age Computation with gtrack
 # ================================================
 #
-# This example demonstrates how to use tractec's SeafloorAgeTracker
+# This example demonstrates how to use gtrack's SeafloorAgeTracker
 # for computing seafloor ages using Lagrangian particle tracking.
 # The stepwise interface is ideal for simulations that need to
-# access ages at multiple intermediate geological ages.
+# access ages at multiple intermediate geological ages, let's say
+# for a mantle convection simulation that is using sequential data-assimilation
+# approach.
 #
-# We will:
-# 1. Initialize tracers at mid-ocean ridges for a starting age
-# 2. Step through geological time toward present
-# 3. Save and load checkpoints for restarts
-# 4. Access results as PointCloud objects for gadopt integration
+# In this example we will:
+# 1. Initialise tracers at a starting age (300 Ma).
+# 2. Step through geological time toward present, visualising at selected ages.
+# 3. Demonstrate checkpointing for saving and restoring state.
 #
 # For this example, you need GPlates data files. Adjust the paths
 # below to match your system.
@@ -20,24 +21,25 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
-import pygplates
 
-from gtrack import SeafloorAgeTracker, TracerConfig, PointCloudCheckpoint
-from gtrack.boundaries import extract_ridge_points_latlon, extract_subduction_points_latlon
+from gtrack import SeafloorAgeTracker, TracerConfig
 # -
 
 # ## Data File Paths
 #
-# tractec requires three types of GPlates data files:
+# gtrack requires three types of GPlates data files:
 # - Rotation files (.rot): Define how plates move through time
 # - Topology files (.gpmlz): Define plate boundaries
 # - Continental polygons (.gpmlz): Define continental regions
 #
-# These files are typically distributed with GPlates. Adjust these
-# paths to match your GPlates installation.
+# These files are typically distributed with GPlates or with publications done
+# using GPlates. For this example we use the plate model of Matthews et al. that can be downloaded
+# from https://data.gadopt.org/demos/Matthews_et_al_410_0.tar.gz.
+# Run `make data` in the examples directory to download and extract the data.
+
 
 # +
-data_dir = Path("../") / "data/Plate_model"
+data_dir = Path("./Matthews_et_al_410_0")
 
 rotation_files = [
     data_dir / "Global_EB_250-0Ma_GK07_Matthews++.rot",
@@ -61,37 +63,73 @@ output_dir.mkdir(exist_ok=True)
 
 # ## Configuration
 #
-# TracerConfig controls the simulation parameters. The new API uses
-# pygplates' C++ backend for efficient point advection and collision
-# detection, matching GPlately's approach.
+# TracerConfig controls the simulation parameters. The parameters are grouped
+# into several categories:
+#
+# **Time stepping**: The `time_step` controls how frequently tracers are
+# advected forward in time. Smaller values give more accurate trajectories
+# but increase computation time.
+#
+# **Mesh initialisation**: At the starting age, tracers are placed on an
+# icosahedral mesh that covers the globe. The `default_refinement_levels`
+# controls the resolution - higher levels give more points but require
+# more memory and computation.
+#
+# **Initial age calculation**: For the initial ocean tracers (those not
+# born at ridges), ages are estimated based on distance to the nearest
+# ridge divided by half the spreading rate. The `initial_ocean_mean_spreading_rate`
+# sets this assumed spreading rate.
+#
+# **MOR seed generation**: New tracers are born at mid-ocean ridges (MORs)
+# at each time step. The `ridge_sampling_degrees` controls how densely
+# the ridge is sampled, and `spreading_offset_degrees` offsets new tracers
+# slightly from the ridge axis (to avoid numerical issues at the boundary).
+#
+# **Collision detection**: Tracers are removed when they collide with
+# subduction zones or continental margins. The `velocity_delta_threshold`
+# detects sudden velocity changes (indicating plate boundary crossing),
+# and `distance_threshold_per_myr` sets how close a tracer must be to a
+# boundary to be considered for removal.
 
 # +
 config = TracerConfig(
     # Time stepping
-    time_step=1.0,  # Time step size (Myr)
+    time_step=1.0,  # Myr per step
 
-    # Mesh initialization - icosahedral mesh refinement level
+    # Mesh initialisation - icosahedral mesh refinement level
     # Level 5 = ~10,242 points, Level 6 = ~40,962 points
     default_refinement_levels=5,
 
     # Initial age calculation
-    initial_ocean_mean_spreading_rate=75.0,  # mm/yr (GPlately default)
+    initial_ocean_mean_spreading_rate=75.0,  # mm/yr
 
     # MOR seed generation
-    ridge_sampling_degrees=2.0,    # Ridge tessellation (~50 km at equator)
-    spreading_offset_degrees=0.01,  # Offset from ridge (~1 km)
+    ridge_sampling_degrees=4.0,    # Ridge point spacing in degrees
+    spreading_offset_degrees=0.01,  # Offset from ridge axis in degrees
 
-    # Collision detection (C++ backend - GPlately compatible)
-    velocity_delta_threshold=7.0,      # km/Myr (converted to 0.7 cm/yr)
-    distance_threshold_per_myr=10.0,   # km/Myr
+    # Collision detection thresholds
+    velocity_delta_threshold=7.0,      # km/Myr velocity change to trigger check
+    distance_threshold_per_myr=10.0,   # km/Myr proximity threshold
 )
 # -
 
-# ## Initialize the Tracker
+# ## Initialise the Tracker
 #
-# The SeafloorAgeTracker maintains tracer state in memory and
-# provides incremental updates as geological age decreases
-# toward present (0 Ma).
+# The SeafloorAgeTracker is designed for **stepwise** simulations where you
+# need tracer positions at multiple intermediate geological ages. It maintains
+# the tracer state internally, allowing you to repeatedly call `step_to()` to
+# advance tracers forward in time (i.e., decreasing geological age toward 0 Ma).
+#
+# The tracker is initialised with the GPlates data files: rotation files define
+# plate motions through time, topology files define plate boundaries, and
+# continental polygons (optional) define regions where oceanic tracers are removed.
+#
+# After creating the tracker, we call `initialize()` with a `starting_age`.
+# This creates an initial set of tracers on an icosahedral mesh covering the
+# ocean basins. Each tracer's initial age is estimated from its distance to
+# the nearest mid-ocean ridge, divided by half the `initial_ocean_mean_spreading_rate`
+# from the configuration. This provides a reasonable first guess for the age
+# structure of oceanic lithosphere at the starting time.
 
 # +
 tracker = SeafloorAgeTracker(
@@ -99,215 +137,97 @@ tracker = SeafloorAgeTracker(
     topology_files=topology_files,
     continental_polygons=continental_polygons,
     config=config,
-    verbose=True
 )
 
-# Initialize tracers at ridges for starting age
-starting_age = 200  # Ma
+# Initialise tracers at the starting geological age
+starting_age = 300  # Ma
 n_tracers = tracker.initialize(starting_age=starting_age)
-print(f"Initialized {n_tracers} tracers at {starting_age} Ma")
-
-# Load rotation model and topology features for boundary visualization
-rotation_model = pygplates.RotationModel([str(f) for f in rotation_files])
-topology_features = pygplates.FeatureCollection()
-for f in topology_files:
-    topology_features.add(pygplates.FeatureCollection(str(f)))
+print(f"Initialised {n_tracers} tracers at {starting_age} Ma")
 # -
 
 # ## Stepwise Evolution
 #
-# The step_to() method evolves tracers to a target geological age.
-# It returns a PointCloud with an 'age' property containing the
-# material age (time since formation at ridge) of each tracer.
+# The `step_to()` method evolves tracers to a target geological age. It handles
+# all the intermediate steps internally (using the configured `time_step`) and
+# returns a PointCloud with the tracer positions and ages at the target time.
+#
+# We'll step through selected ages to demonstrate the evolution:
+# - 295 Ma (5 Myr after start)
+# - 280 Ma (20 Myr after start)
+# - 100 Ma (200 Myr after start)
+# - 0 Ma (present day)
 
 # +
-# Step through time in 5 Myr increments
-for target_age in range(starting_age - 5, -1, -5):
-    # Get "before" tracer positions (current state before stepping)
-    before_cloud = tracker.get_current_state()
-    before_lonlat = before_cloud.lonlat
-    before_ages = before_cloud.get_property('age')
-    current_age = tracker.current_age
+# We define a helper function to plot the tracer field at each age.
+# This keeps the code clean and avoids repetition as we step through
+# multiple geological ages.
 
-    # Get ridge and subduction points for visualization (BEFORE)
-    ridge_lats, ridge_lons = extract_ridge_points_latlon(
-        current_age, topology_features, rotation_model, tessellate_degrees=1.0
-    )
-    sub_lats, sub_lons = extract_subduction_points_latlon(
-        current_age, topology_features, rotation_model, tessellate_degrees=1.0
-    )
 
-    # Step to target age
-    cloud = tracker.step_to(target_age)
+def plot_tracers(cloud, geological_age):
+    """Plot tracer positions coloured by material age."""
+    lonlat = cloud.lonlat
+    ages = cloud.get_property('age')
 
-    # Access data for gadopt integration
-    xyz = cloud.xyz                    # (N, 3) Cartesian coordinates
-    ages = cloud.get_property('age')   # (N,) material ages
-    lonlat = cloud.lonlat              # (N, 2) lon/lat coordinates
+    fig = plt.figure(figsize=(12, 6))
+    ax = plt.axes(projection=ccrs.Mollweide())
 
-    # Get ridge and subduction points after step
-    ridge_lats_after, ridge_lons_after = extract_ridge_points_latlon(
-        target_age, topology_features, rotation_model, tessellate_degrees=1.0
-    )
-    sub_lats_after, sub_lons_after = extract_subduction_points_latlon(
-        target_age, topology_features, rotation_model, tessellate_degrees=1.0
-    )
-
-    # Print statistics
-    stats = tracker.get_statistics()
-    print(f"\nAt {target_age} Ma:")
-    print(f"  Tracers: {stats['count']}")
-    print(f"  Age range: {stats['min_age']:.1f} - {stats['max_age']:.1f} Myr")
-    print(f"  Mean age: {stats['mean_age']:.1f} Myr")
-
-    # Plot tracers with boundaries - BEFORE and AFTER
-    fig, axes = plt.subplots(1, 2, figsize=(20, 8),
-                             subplot_kw={'projection': ccrs.Mollweide()})
-
-    # LEFT PLOT: Before step (at current_age)
-    ax = axes[0]
-
-    # Plot tracers BEFORE
     scatter = ax.scatter(
-        before_lonlat[:, 0], before_lonlat[:, 1],
-        c=before_ages,
-        s=2,
-        cmap='viridis_r',
-        vmin=0, vmax=max(10, before_ages.max()) if len(before_ages) > 0 else 10,
-        transform=ccrs.PlateCarree(),
-        zorder=5
-    )
-
-    # Plot ridges as black dots (scatter avoids dateline artifacts)
-    if len(ridge_lons) > 0:
-        ax.scatter(ridge_lons, ridge_lats, c='black', s=3, marker='.',
-                   transform=ccrs.PlateCarree(), zorder=10, label='Ridges')
-
-    # Plot subduction zones as triangles
-    if len(sub_lons) > 0:
-        ax.scatter(sub_lons, sub_lats, c='red', s=8, marker='^',
-                   transform=ccrs.PlateCarree(), zorder=10, label='Subduction')
-
-    ax.coastlines(resolution='110m', linewidth=0.5)
-    ax.set_global()
-    ax.set_title(
-        f'BEFORE: Tracers at {current_age} Ma\n(ridges=dots, subduction=triangles)')
-    ax.legend(loc='lower left', fontsize=8)
-
-    # RIGHT PLOT: After step (at target_age)
-    ax = axes[1]
-
-    # Plot tracers AFTER
-    scatter2 = ax.scatter(
         lonlat[:, 0], lonlat[:, 1],
         c=ages,
-        s=2,
+        s=1,
         cmap='viridis_r',
-        vmin=0, vmax=max(10, ages.max()) if len(ages) > 0 else 10,
-        transform=ccrs.PlateCarree(),
-        zorder=5
+        vmin=0, vmax=max(50, ages.max()),
+        transform=ccrs.PlateCarree()
     )
-
-    # Plot ridges as black dots (at target_age)
-    if len(ridge_lons_after) > 0:
-        ax.scatter(ridge_lons_after, ridge_lats_after, c='black', s=3, marker='.',
-                   transform=ccrs.PlateCarree(), zorder=10, label='Ridges')
-
-    # Plot subduction zones as triangles (at target_age)
-    if len(sub_lons_after) > 0:
-        ax.scatter(sub_lons_after, sub_lats_after, c='red', s=8, marker='^',
-                   transform=ccrs.PlateCarree(), zorder=10, label='Subduction')
 
     ax.coastlines(resolution='110m', linewidth=0.5)
     ax.set_global()
-    ax.set_title(
-        f'AFTER: Tracers at {target_age} Ma\n(ridges=dots, subduction=triangles)')
-    ax.legend(loc='lower left', fontsize=8)
 
-    # Add colorbar
-    cbar = plt.colorbar(scatter2, ax=axes, orientation='horizontal',
-                        pad=0.05, aspect=40, shrink=0.6)
-    cbar.set_label('Seafloor Age (Myr)', fontsize=12)
+    cbar = plt.colorbar(scatter, ax=ax, orientation='horizontal',
+                        pad=0.05, aspect=40, shrink=0.8)
+    cbar.set_label('Seafloor Age (Myr)')
 
-    fig.suptitle(f'Step from {current_age} Ma to {target_age} Ma', fontsize=14)
-    fig.tight_layout()
-    fig.savefig(output_dir / f'seafloor_age_{target_age:03d}Ma.png', dpi=150)
-    plt.close(fig)
-    print(f"  Saved plot: seafloor_age_{target_age:03d}Ma.png")
+    ax.set_title(f'Seafloor Tracers at {geological_age} Ma')
+    plt.show()
 
-
+    # Print statistics
+    stats_dict = {
+        'count': len(ages),
+        'min_age': ages.min(),
+        'max_age': ages.max(),
+        'mean_age': ages.mean()
+    }
+    print(f"  Tracers: {stats_dict['count']}")
+    print(
+        f"  Age range: {stats_dict['min_age']:.1f} - {stats_dict['max_age']:.1f} Myr")
+    print(f"  Mean age: {stats_dict['mean_age']:.1f} Myr")
 # -
 
-# ## Checkpointing
-#
-# For long-running simulations, checkpointing allows you to save
-# and restore state. This is useful for restarts after failures
-# or for pausing/resuming simulations.
+# ### After 5 Myr (295 Ma)
+
 
 # +
-# Save a checkpoint
-checkpoint_file = output_dir / "seafloor_checkpoint.npz"
-tracker.save_checkpoint(str(checkpoint_file))
-print(f"\nSaved checkpoint at {tracker.current_age} Ma")
-
-# To demonstrate restart, create a new tracker and load checkpoint
-tracker2 = SeafloorAgeTracker(
-    rotation_files=rotation_files,
-    topology_files=topology_files,
-    continental_polygons=continental_polygons,
-    config=config,
-    verbose=False
-)
-tracker2.load_checkpoint(str(checkpoint_file))
-print(f"Restored tracker at {tracker2.current_age} Ma with {tracker2.n_tracers} tracers")
+cloud = tracker.step_to(295)
+plot_tracers(cloud, 295)
 # -
 
-# ## Initialize from PointCloud
-#
-# For custom scenarios, you can initialize from an existing
-# PointCloud. This is useful when you have tracer positions
-# from another source.
+# ### After 20 Myr (280 Ma)
 
 # +
-# Get current state as PointCloud
-current_cloud = tracker.get_current_state()
-
-# Create a new tracker and initialize from this cloud
-tracker3 = SeafloorAgeTracker(
-    rotation_files=rotation_files,
-    topology_files=topology_files,
-    continental_polygons=continental_polygons,
-    config=config,
-    verbose=False
-)
-
-# Initialize from existing cloud
-# The cloud must have 'age' property
-tracker3.initialize_from_cloud(current_cloud, tracker.current_age)
-print(f"\nInitialized from PointCloud: {tracker3.n_tracers} tracers at {tracker3.current_age} Ma")
+cloud = tracker.step_to(280)
+plot_tracers(cloud, 280)
 # -
 
-# ## Using Results in gadopt
-#
-# The PointCloud xyz coordinates are directly compatible with
-# gadopt's spatial interpolation. Here's how you would typically
-# use them:
+# ### At 100 Ma (200 Myr of evolution)
 
 # +
-# Get final state
-final_cloud = tracker.get_current_state()
+cloud = tracker.step_to(100)
+plot_tracers(cloud, 100)
+# -
 
-# For gadopt integration:
-xyz = final_cloud.xyz                  # Use directly with gadopt interpolation
-ages = final_cloud.get_property('age')  # Material ages (time since formation)
+# ### Present Day (0 Ma)
 
-# Convert ages to lithospheric depth (example transformation)
-# In reality, you would use a proper age-to-depth relationship
-lithospheric_depth = 10e3 * np.sqrt(ages)  # Simplified half-space cooling
-
-print(f"\nFinal state at {tracker.current_age} Ma:")
-print(f"  Points: {len(xyz)}")
-print(f"  XYZ shape: {xyz.shape}")
-print(f"  Age range: {ages.min():.1f} - {ages.max():.1f} Myr")
-print(f"  Depth range: {lithospheric_depth.min()/1e3:.1f} - {lithospheric_depth.max()/1e3:.1f} km")
+# +
+cloud = tracker.step_to(0)
+plot_tracers(cloud, 0)
 # -

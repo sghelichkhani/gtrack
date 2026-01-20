@@ -2,52 +2,48 @@
 # ===================================================
 #
 # This example demonstrates how to rotate user-provided points
-# through geological time using tractec's Point Rotation API.
+# through geological time using gtrack's Point Rotation API.
 # This is useful for reconstructing continental lithospheric
 # structure at past geological ages.
 #
-# The workflow is:
-# 1. Create a PointCloud from lat/lon coordinates
-# 2. Filter to keep only continental points
-# 3. Assign plate IDs based on position
-# 4. Rotate to target geological age
-# 5. Export for visualization or further processing
+# **How it works:**
+#
+# Each point on Earth belongs to a tectonic plate. To rotate points
+# back in time, we need to:
+# 1. Determine which plate each point belongs to (using static polygons)
+# 2. Apply the appropriate rotation for that plate at the target age
+#
+# The rotation files contain Euler pole rotations for each plate at
+# each geological age. By assigning plate IDs to points and then
+# applying the corresponding rotations, we can reconstruct where
+# continental material was located in the past.
 
 # +
 from pathlib import Path
 import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
 
-from gtrack import (
-    PointCloud,
-    PointRotator,
-    PolygonFilter,
-    save_points_gpml,
-    save_points_numpy,
-)
+from gtrack import PointCloud, PointRotator, PolygonFilter
 # -
 
 # ## Data File Paths
 #
-# We need rotation files and polygon files from GPlates.
-# Adjust these paths to match your installation.
+# Run `make data` in the examples directory to download and extract the data.
 
 # +
-data_dir = Path("/Applications/GPlates_2.4.0/GeoData/FeatureCollections/")
+data_dir = Path("./Matthews_et_al_410_0")
 
-rotation_file = str(
-    data_dir / "Rotations/Zahirovic_etal_2022_OptimisedMantleRef_and_NNRMantleRef.rot"
-)
+rotation_files = [
+    data_dir / "Global_EB_250-0Ma_GK07_Matthews++.rot",
+    data_dir / "Global_EB_410-250Ma_GK07_Matthews++.rot"
+]
 
-continental_polygons_file = str(
-    data_dir / "ContinentalPolygons/Global_EarthByte_GPlates_PresentDay_ContinentalPolygons.gpmlz"
-)
+continental_polygons_file = data_dir / \
+    "ContPolys/PresentDay_ContinentalPolygons_Matthews++.shp"
 
-static_polygons_file = str(
-    data_dir / "StaticPolygons/Global_EarthByte_GPlates_PresentDay_StaticPlatePolygons.gpmlz"
-)
-
-output_dir = Path("output")
-output_dir.mkdir(exist_ok=True)
+static_polygons_file = data_dir / \
+    "StaticPolys/PresentDay_StaticPlatePolygons_Matthews++.shp"
 # -
 
 # ## Create Initial Point Grid
@@ -82,7 +78,7 @@ print(f"Created grid with {cloud.n_points} points")
 # +
 polygon_filter = PolygonFilter(
     polygon_files=continental_polygons_file,
-    rotation_files=[rotation_file]
+    rotation_files=rotation_files
 )
 
 # Keep only points inside continental polygons at present day
@@ -100,7 +96,7 @@ print(f"Removed {cloud.n_points - continental_cloud.n_points} oceanic points")
 
 # +
 rotator = PointRotator(
-    rotation_files=[rotation_file],
+    rotation_files=rotation_files,
     static_polygons=static_polygons_file
 )
 
@@ -121,11 +117,11 @@ print(f"Found {len(unique_plates)} unique plates")
 # ## Rotate to Past Geological Age
 #
 # Now we rotate the continental points to their positions at
-# a past geological age. The rotation uses batched operations
-# for efficiency.
+# a past geological age. The `rotate()` method applies the appropriate
+# Euler pole rotation for each point based on its plate ID.
 
 # +
-target_age = 50.0  # 50 Ma
+target_age = 100.0  # Ma
 
 rotated_cloud = rotator.rotate(
     continental_cloud,
@@ -133,64 +129,44 @@ rotated_cloud = rotator.rotate(
     to_age=target_age
 )
 
-print(f"\nRotated {rotated_cloud.n_points} points to {target_age} Ma")
-
-# Verify properties are preserved
-assert 'lithospheric_depth' in rotated_cloud.properties
-print("Properties preserved after rotation")
+print(f"Rotated {rotated_cloud.n_points} points to {target_age} Ma")
 # -
 
-# ## Access Results for gadopt
+# ## Visualise the Result
 #
-# The rotated coordinates can be used directly with gadopt's
-# spatial interpolation for applying continental structure
-# to your mesh.
+# Plot the rotated continental points at the target geological age.
 
 # +
-# For gadopt integration:
-xyz = rotated_cloud.xyz                              # (N, 3) Cartesian
-depths = rotated_cloud.get_property('lithospheric_depth')  # (N,) property
+lonlat = rotated_cloud.lonlat
 
-print(f"\nResults for gadopt:")
-print(f"  XYZ array shape: {xyz.shape}")
-print(f"  Depth array shape: {depths.shape}")
+fig = plt.figure(figsize=(12, 6))
+ax = plt.axes(projection=ccrs.Mollweide())
 
-# Get geographic coordinates for visualization
-latlon_rotated = rotated_cloud.latlon
-print(f"\nGeographic extent at {target_age} Ma:")
-print(f"  Latitude: {latlon_rotated[:, 0].min():.1f} to {latlon_rotated[:, 0].max():.1f}")
-print(f"  Longitude: {latlon_rotated[:, 1].min():.1f} to {latlon_rotated[:, 1].max():.1f}")
+ax.scatter(
+    lonlat[:, 1], lonlat[:, 0],  # lon, lat
+    c='saddlebrown',
+    s=1,
+    transform=ccrs.PlateCarree()
+)
+
+ax.coastlines(resolution='110m', linewidth=0.5, color='gray', alpha=0.5)
+ax.set_global()
+ax.set_title(f'Continental Points Rotated to {int(target_age)} Ma')
+plt.show()
+
+print(f"Points: {rotated_cloud.n_points}")
+print(f"Properties preserved: {list(rotated_cloud.properties.keys())}")
 # -
 
-# ## Save Results
+# ## Using Results with gadopt
 #
-# tractec supports multiple output formats:
-# - NumPy (.npz) for Python workflows
-# - GPML (.gpml) for viewing in GPlates
+# The rotated PointCloud provides Cartesian coordinates that can be
+# used directly with gadopt's spatial interpolation.
 
 # +
-# Save as NumPy for further processing
-numpy_file = output_dir / f"continental_points_{int(target_age)}Ma.npz"
-save_points_numpy(rotated_cloud, numpy_file)
-print(f"\nSaved: {numpy_file}")
+xyz = rotated_cloud.xyz
+depths = rotated_cloud.get_property('lithospheric_depth')
 
-# Save as GPML for viewing in GPlates
-gpml_file = output_dir / f"continental_points_{int(target_age)}Ma.gpml"
-save_points_gpml(rotated_cloud, gpml_file)
-print(f"Saved: {gpml_file}")
+print(f"XYZ array shape: {xyz.shape}")
+print(f"Depth array shape: {depths.shape}")
 # -
-
-# ## Summary
-#
-# The continental rotation workflow:
-#
-# 1. Create PointCloud from your lat/lon data
-# 2. Filter to continental regions with PolygonFilter
-# 3. Assign plate IDs with PointRotator.assign_plate_ids()
-# 4. Rotate to target age with PointRotator.rotate()
-# 5. Access xyz coordinates for gadopt interpolation
-#
-# Key points:
-# - Properties (lithospheric_depth, etc.) are preserved during rotation
-# - Coordinates are Cartesian internally, matching gadopt's format
-# - Points without valid plate IDs are removed with warning

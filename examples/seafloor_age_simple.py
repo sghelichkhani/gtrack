@@ -2,26 +2,26 @@
 # =========================================
 #
 # This example demonstrates the simplest way to compute seafloor
-# ages using tractec. The compute_ages() class method provides a
+# ages using gtrack. The `compute_ages()` class method provides a
 # functional interface that handles all setup internally.
 #
-# Use this approach when you need ages at a single geological age
-# and don't need incremental updates.
+# Use this approach when you need ages at a single target geological
+# age and don't need to access intermediate states.
 
 # +
-from gtrack import SeafloorAgeTracker, TracerConfig
-import numpy as np
+from pathlib import Path
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
-from pathlib import Path
+
+from gtrack import SeafloorAgeTracker, TracerConfig
 # -
 
 # ## Data File Paths
 #
-# Adjust these paths to match your GPlates data installation.
+# Run `make data` in the examples directory to download and extract the data.
 
 # +
-data_dir = Path("../") / "data/Plate_model"
+data_dir = Path("./Matthews_et_al_410_0")
 
 rotation_files = [
     data_dir / "Global_EB_250-0Ma_GK07_Matthews++.rot",
@@ -70,20 +70,21 @@ config = TracerConfig(
 
 # ## Compute Ages in One Call
 #
-# The compute_ages() class method creates a tracker, initializes
-# tracers at ridges, and evolves them to the target age - all in
-# a single call. This is the simplest way to get seafloor ages.
+# The `compute_ages()` class method creates a tracker, initialises
+# tracers at the starting age, and evolves them to the target age - all
+# in a single call. This is the simplest way to get seafloor ages.
+#
+# Here we compute present-day (0 Ma) seafloor ages, starting the
+# simulation at 200 Ma.
 
 # +
-# Compute seafloor ages at 170 Ma, starting from 200 Ma
 cloud = SeafloorAgeTracker.compute_ages(
-    target_age=170,
+    target_age=0,
     starting_age=200,
     rotation_files=rotation_files,
     topology_files=topology_files,
     continental_polygons=continental_polygons,
     config=config,
-    verbose=True
 )
 # -
 # ## Access Results
@@ -99,40 +100,36 @@ lonlat = cloud.lonlat  # (N, 2) array with [lon, lat] in degrees
 tracer_ages = cloud.get_property('age')   # (N,) material ages in Myr
 # -
 
-# ## Plotting of the results
+# ## Plotting the Results
 #
-# Plot the tracers directly as a scatter plot on a Mollweide projection.
+# Plot the tracers as a scatter plot on a Mollweide projection,
+# coloured by their material age.
 
 # +
-# Extract lon/lat from the cloud
-lons = lonlat[:, 0]
-lats = lonlat[:, 1]
-
-# Create figure with Mollweide projection
-fig = plt.figure(num=1, figsize=(12, 6))
+fig = plt.figure(figsize=(12, 6))
 ax = plt.axes(projection=ccrs.Mollweide())
 
-# Plot tracers as scatter points
 scatter = ax.scatter(
-    lons, lats,
+    lonlat[:, 0], lonlat[:, 1],
     c=tracer_ages,
-    s=1,  # Small point size
-    cmap='viridis_r',  # Reversed: young=yellow, old=purple
-    vmin=0, vmax=30,
+    s=1,
+    cmap='viridis_r',
+    vmin=0, vmax=200,
     transform=ccrs.PlateCarree()
 )
 
-# Add coastlines and set global extent
 ax.coastlines(resolution='110m', linewidth=0.5)
 ax.set_global()
 
-# Add colorbar
 cbar = plt.colorbar(scatter, ax=ax, orientation='horizontal',
                     pad=0.05, aspect=40, shrink=0.8)
-cbar.set_label('Seafloor Age (Myr)', fontsize=12)
+cbar.set_label('Seafloor Age (Myr)')
 
-ax.set_title(f'Seafloor Tracers at 170 Ma')
+ax.set_title('Present-Day Seafloor Ages (computed from 200 Ma)')
+plt.show()
 
-fig.tight_layout()
-fig.savefig('seafloor_age_simple.png', dpi=150)
+# Print summary statistics
+print(f"Number of tracers: {len(tracer_ages)}")
+print(f"Age range: {tracer_ages.min():.1f} - {tracer_ages.max():.1f} Myr")
+print(f"Mean age: {tracer_ages.mean():.1f} Myr")
 # -

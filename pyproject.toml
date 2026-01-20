@@ -46,9 +46,17 @@ docs = [
     "mkdocs>=1.5",
     "mkdocs-material>=9.0",
     "mkdocstrings[python]>=0.24",
+    "mkdocs-jupyter>=0.24",
+]
+demos = [
+    "jupytext>=1.15",
+    "nbconvert>=7.0",
+    "ipykernel>=6.0",
+    "matplotlib>=3.5",
+    "cartopy>=0.21",
 ]
 all = [
-    "gtrack[visualization,dev,docs]",
+    "gtrack[visualization,dev,docs,demos]",
 ]
 
 [project.urls]

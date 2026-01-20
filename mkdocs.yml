@@ -26,6 +26,9 @@ theme:
 
 plugins:
   - search
+  - mkdocs-jupyter:
+      include_source: true
+      execute: false  # Notebooks are pre-executed
   - mkdocstrings:
       handlers:
         python:
@@ -50,4 +53,8 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Demos:
+      - Simple Example: demos/seafloor_age_simple.ipynb
+      - Stepwise Example: demos/seafloor_age_stepwise.ipynb
+      - Continental Rotation: demos/continental_rotation.ipynb
   - API Reference: api.md
