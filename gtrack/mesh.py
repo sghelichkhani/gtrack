@@ -48,7 +48,7 @@ def _find_neighbours(point: np.ndarray, all_points: np.ndarray) -> list:
             math.radians(p[0]), math.radians(p[1])
         )
         if dist > 0:
-            if min_distance is not None and math.isclose(min_distance, dist, abs_tol=1e-04):
+            if min_distance is not None and math.isclose(min_distance, dist, rel_tol=1e-9, abs_tol=1e-3):
                 neighbours.append(idx)
             elif min_distance is None or dist < min_distance:
                 min_distance = dist
@@ -77,7 +77,7 @@ def _find_faces(vertices: np.ndarray) -> list:
                     math.radians(vertices[neighbours[j]][0]),
                     math.radians(vertices[neighbours[j]][1])
                 )
-                if math.isclose(dist_i_j, dist_i_p):
+                if math.isclose(dist_i_j, dist_i_p, rel_tol=1e-9, abs_tol=1e-3):
                     faces.append(sorted([idx, neighbours[i], neighbours[j]]))
 
     unique_faces = []
