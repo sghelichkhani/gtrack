@@ -5,6 +5,7 @@ DATA_TARBALL := Matthews_et_al_410_0.tar.gz
 DATA_DIR := Matthews_et_al_410_0
 DEMOS_DIR := ../docs/demos
 
+# Data from Hoggard et al 2022
 # OSF data (lithospheric thickness maps)
 OSF_PROJECT := twksd
 OSF_FOLDER_ID := 5ecefa09aeeb6d0286087b87

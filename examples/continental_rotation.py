@@ -31,7 +31,11 @@ from gtrack import PointCloud, PointRotator, PolygonFilter
 # ## Data File Paths
 #
 # Run `make data` and `make osf-data` in the examples directory to download
-# the plate model and lithospheric thickness data.
+# the plate model and lithospheric thickness data. For the plate model, 
+# we are using the plate model by Matthews et al. that can be downloaded
+# from https://data.gadopt.org/demos/Matthews_et_al_410_0.tar.gz, and 
+# the global lithospheric thickness map produced by Hoggard et al. 2022, 
+# which is based on the surface tomography model SL2013sv.
 
 # +
 data_dir = Path("./Matthews_et_al_410_0")
