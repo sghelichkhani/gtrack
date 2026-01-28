@@ -53,6 +53,7 @@ demos = [
     "ipykernel>=6.0",
     "matplotlib>=3.5",
     "cartopy>=0.21",
+    "h5py>=3.0",
 ]
 all = [
     "gtrack[visualization,dev,docs,demos]",

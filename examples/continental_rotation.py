@@ -21,6 +21,7 @@
 # +
 from pathlib import Path
 import numpy as np
+import h5py
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 
@@ -29,7 +30,8 @@ from gtrack import PointCloud, PointRotator, PolygonFilter
 
 # ## Data File Paths
 #
-# Run `make data` in the examples directory to download and extract the data.
+# Run `make data` and `make osf-data` in the examples directory to download
+# the plate model and lithospheric thickness data.
 
 # +
 data_dir = Path("./Matthews_et_al_410_0")
@@ -44,29 +46,39 @@ continental_polygons_file = data_dir / \
 
 static_polygons_file = data_dir / \
     "StaticPolys/PresentDay_StaticPlatePolygons_Matthews++.shp"
+
+# Lithospheric thickness data from SL2013sv seismic model
+lithosphere_file = Path("./lithospheric_thickness_maps/global/SL2013sv/SL2013sv.nc")
 # -
 
-# ## Create Initial Point Grid
+# ## Load Lithospheric Thickness Data
 #
-# We start with a regular lat/lon grid of points. In a real
-# application, these would be locations where you have
-# continental lithospheric data (e.g., from seismic tomography).
+# We load lithospheric thickness from the SL2013sv seismic tomography model.
+# The data is stored in a NetCDF/HDF5 file with a 0.5-degree global grid.
+# We use h5py to read the file for Firedrake compatibility.
 
 # +
-# Create a 2-degree resolution grid
-lons = np.linspace(-180.0, 180.0, 180)
-lats = np.linspace(-90.0, 90.0, 90)
-lon_grid, lat_grid = np.meshgrid(lons, lats)
+# Load lithospheric thickness data using h5py
+with h5py.File(lithosphere_file, 'r') as f:
+    lon_data = f['lon'][:]  # 0-360 degrees
+    lat_data = f['lat'][:]  # -90 to 90 degrees
+    thickness = f['z'][:]   # Lithospheric thickness in km
+
+# Convert longitude from 0-360 to -180 to 180
+lon_data = np.where(lon_data > 180, lon_data - 360, lon_data)
+
+# Create meshgrid and flatten to point arrays
+lon_grid, lat_grid = np.meshgrid(lon_data, lat_data)
 latlon = np.column_stack([lat_grid.ravel(), lon_grid.ravel()])
 
 # Create PointCloud from lat/lon
 cloud = PointCloud.from_latlon(latlon)
 
-# Add a sample property (e.g., lithospheric depth from present-day data)
-# In reality, this would come from your input data
-cloud.add_property('lithospheric_depth', np.ones(cloud.n_points) * 100e3)
+# Add lithospheric thickness as a property (convert km to meters)
+cloud.add_property('lithospheric_thickness', thickness.ravel() * 1e3)
 
-print(f"Created grid with {cloud.n_points} points")
+print(f"Loaded {cloud.n_points} points from {lithosphere_file.name}")
+print(f"Thickness range: {thickness.min():.1f} - {thickness.max():.1f} km")
 # -
 
 # ## Filter to Continental Points
@@ -134,24 +146,33 @@ print(f"Rotated {rotated_cloud.n_points} points to {target_age} Ma")
 
 # ## Visualise the Result
 #
-# Plot the rotated continental points at the target geological age.
+# Plot the rotated continental points at the target geological age,
+# coloured by lithospheric thickness.
 
 # +
 lonlat = rotated_cloud.lonlat
+thickness_km = rotated_cloud.get_property('lithospheric_thickness') / 1e3
 
 fig = plt.figure(figsize=(12, 6))
 ax = plt.axes(projection=ccrs.Mollweide())
 
-ax.scatter(
-    lonlat[:, 1], lonlat[:, 0],  # lon, lat
-    c='saddlebrown',
+scatter = ax.scatter(
+    lonlat[:, 0], lonlat[:, 1],  # lon, lat
+    c=thickness_km,
     s=1,
+    cmap='viridis',
+    vmin=50, vmax=250,
     transform=ccrs.PlateCarree()
 )
 
 ax.coastlines(resolution='110m', linewidth=0.5, color='gray', alpha=0.5)
 ax.set_global()
-ax.set_title(f'Continental Points Rotated to {int(target_age)} Ma')
+
+cbar = plt.colorbar(scatter, ax=ax, orientation='horizontal',
+                    pad=0.05, aspect=40, shrink=0.8)
+cbar.set_label('Lithospheric Thickness (km)')
+
+ax.set_title(f'Continental Lithosphere Rotated to {int(target_age)} Ma')
 plt.show()
 
 print(f"Points: {rotated_cloud.n_points}")
@@ -165,8 +186,9 @@ print(f"Properties preserved: {list(rotated_cloud.properties.keys())}")
 
 # +
 xyz = rotated_cloud.xyz
-depths = rotated_cloud.get_property('lithospheric_depth')
+thickness = rotated_cloud.get_property('lithospheric_thickness')
 
 print(f"XYZ array shape: {xyz.shape}")
-print(f"Depth array shape: {depths.shape}")
+print(f"Thickness array shape: {thickness.shape}")
+print(f"Thickness range: {thickness.min()/1e3:.1f} - {thickness.max()/1e3:.1f} km")
 # -

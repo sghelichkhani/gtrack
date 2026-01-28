@@ -44,6 +44,10 @@ jobs:
         working-directory: examples
         run: make data
 
+      - name: Download lithospheric thickness data
+        working-directory: examples
+        run: make osf-data
+
       - name: Generate demo notebooks
         working-directory: examples
         run: make notebooks
