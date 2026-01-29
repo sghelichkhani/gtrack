@@ -48,6 +48,10 @@ jobs:
         working-directory: examples
         run: make osf-data
 
+      - name: Interpolate lithospheric data to icosahedral mesh
+        working-directory: examples
+        run: make litho-data
+
       - name: Generate demo notebooks
         working-directory: examples
         run: make notebooks
