@@ -58,13 +58,9 @@
 
 ## Mesh Generation
 
-::: gtrack.create_icosahedral_mesh
+::: gtrack.create_sphere_mesh_xyz
 
-::: gtrack.create_icosahedral_mesh_latlon
-
-::: gtrack.create_icosahedral_mesh_xyz
-
-::: gtrack.mesh_point_count
+::: gtrack.create_sphere_mesh_latlon
 
 ---
 
