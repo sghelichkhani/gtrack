@@ -70,9 +70,9 @@ output_dir.mkdir(exist_ok=True)
 # advected forward in time. Smaller values give more accurate trajectories
 # but increase computation time.
 #
-# **Mesh initialisation**: At the starting age, tracers are placed on an
-# icosahedral mesh that covers the globe. The `default_refinement_levels`
-# controls the resolution - higher levels give more points but require
+# **Mesh initialisation**: At the starting age, tracers are placed on a
+# Fibonacci sphere mesh that covers the globe uniformly. The `default_mesh_points`
+# controls the resolution - more points give higher resolution but require
 # more memory and computation.
 #
 # **Initial age calculation**: For the initial ocean tracers (those not
@@ -96,9 +96,9 @@ config = TracerConfig(
     # Time stepping
     time_step=1.0,  # Myr per step
 
-    # Mesh initialisation - icosahedral mesh refinement level
-    # Level 5 = ~10,242 points, Level 6 = ~40,962 points
-    default_refinement_levels=5,
+    # Mesh initialisation - number of points on Fibonacci sphere
+    # 10000 points gives ~115 km spacing, 40000 gives ~57 km spacing
+    default_mesh_points=10000,
 
     # Initial age calculation
     initial_ocean_mean_spreading_rate=75.0,  # mm/yr
@@ -125,7 +125,7 @@ config = TracerConfig(
 # continental polygons (optional) define regions where oceanic tracers are removed.
 #
 # After creating the tracker, we call `initialize()` with a `starting_age`.
-# This creates an initial set of tracers on an icosahedral mesh covering the
+# This creates an initial set of tracers on a Fibonacci sphere mesh covering the
 # ocean basins. Each tracer's initial age is estimated from its distance to
 # the nearest mid-ocean ridge, divided by half the `initial_ocean_mean_spreading_rate`
 # from the configuration. This provides a reasonable first guess for the age

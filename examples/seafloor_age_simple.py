@@ -51,9 +51,9 @@ config = TracerConfig(
     # Time stepping
     time_step=1.0,  # Time step size (Myr)
 
-    # Mesh initialization - icosahedral mesh refinement level
-    # Level 5 = ~10,242 points, Level 6 = ~40,962 points
-    default_refinement_levels=5,
+    # Mesh initialization - number of points on Fibonacci sphere
+    # 10000 points gives ~115 km spacing, 40000 gives ~57 km spacing
+    default_mesh_points=10000,
 
     # Initial age calculation
     initial_ocean_mean_spreading_rate=75.0,  # mm/yr (GPlately default)
