@@ -317,14 +317,14 @@ def inverse_distance_weighted_interpolation(values, distances, epsilon=1e-10):
     return result
 
 
-def compute_mesh_spacing_km(refinement_levels, earth_radius_km=6378.1):
+def compute_mesh_spacing_km(n_points, earth_radius_km=6378.1):
     """
-    Compute approximate mesh spacing for an icosahedral mesh.
+    Compute approximate mesh spacing for a given number of points on a sphere.
 
     Parameters
     ----------
-    refinement_levels : int
-        Number of icosahedral mesh refinement levels.
+    n_points : int
+        Number of points on the sphere.
     earth_radius_km : float, default=6378.1
         Earth's radius in kilometers.
 
@@ -335,16 +335,14 @@ def compute_mesh_spacing_km(refinement_levels, earth_radius_km=6378.1):
 
     Notes
     -----
-    The icosahedral mesh at refinement level L has N = 10 * 4^L + 2 points.
     Average area per point = 4 * pi * R^2 / N
     Approximate spacing = sqrt(area per point)
 
     Examples
     --------
-    >>> spacing = compute_mesh_spacing_km(5)
-    >>> 200 < spacing < 300  # Level 5 has ~220 km spacing
+    >>> spacing = compute_mesh_spacing_km(10000)
+    >>> 200 < spacing < 300  # ~10k points gives ~220 km spacing
     True
     """
-    n_points = 10 * (4 ** refinement_levels) + 2
     avg_area = 4 * np.pi * earth_radius_km**2 / n_points
     return np.sqrt(avg_area)

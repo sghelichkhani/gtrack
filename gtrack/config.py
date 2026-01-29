@@ -30,10 +30,9 @@ class TracerConfig:
 
     Initialization
     --------------
-    default_refinement_levels : int
-        Number of icosahedral mesh refinement levels.
-        Level 5 = ~10,242 points, Level 6 = ~40,962 points.
-        Default: 5
+    default_mesh_points : int
+        Number of points for the initial sphere mesh.
+        Default: 10000
     initial_ocean_mean_spreading_rate : float
         Mean spreading rate in mm/yr for initial age calculation.
         Used to compute age = distance / (rate / 2).
@@ -70,7 +69,7 @@ class TracerConfig:
     >>>
     >>> # Custom configuration with higher resolution
     >>> config = TracerConfig(
-    ...     default_refinement_levels=6,  # ~40,962 points
+    ...     default_mesh_points=40000,    # Higher resolution mesh
     ...     ridge_sampling_degrees=0.25,  # ~25 km resolution
     ...     time_step=0.5                 # 0.5 Myr timesteps
     ... )
@@ -85,8 +84,8 @@ class TracerConfig:
     velocity_delta_threshold: float = 7.0  # km/Myr (converted to 0.7 cm/yr for API)
     distance_threshold_per_myr: float = 10.0  # km/Myr
 
-    # Initialization - icosahedral mesh
-    default_refinement_levels: int = 5  # ~10,242 points
+    # Initialization - sphere mesh
+    default_mesh_points: int = 10000
     initial_ocean_mean_spreading_rate: float = 75.0  # mm/yr (GPlately default)
 
     # MOR seed generation
@@ -116,10 +115,10 @@ class TracerConfig:
                 f"distance_threshold_per_myr must be non-negative, "
                 f"got {self.distance_threshold_per_myr}"
             )
-        if self.default_refinement_levels < 0:
+        if self.default_mesh_points < 1:
             raise ValueError(
-                f"default_refinement_levels must be non-negative, "
-                f"got {self.default_refinement_levels}"
+                f"default_mesh_points must be at least 1, "
+                f"got {self.default_mesh_points}"
             )
         if self.initial_ocean_mean_spreading_rate <= 0:
             raise ValueError(
@@ -176,7 +175,7 @@ class TracerConfig:
             'earth_radius': self.earth_radius,
             'velocity_delta_threshold': self.velocity_delta_threshold,
             'distance_threshold_per_myr': self.distance_threshold_per_myr,
-            'default_refinement_levels': self.default_refinement_levels,
+            'default_mesh_points': self.default_mesh_points,
             'initial_ocean_mean_spreading_rate': self.initial_ocean_mean_spreading_rate,
             'ridge_sampling_degrees': self.ridge_sampling_degrees,
             'spreading_offset_degrees': self.spreading_offset_degrees,

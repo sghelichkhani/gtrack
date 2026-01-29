@@ -12,7 +12,7 @@ import pygplates
 
 from .config import TracerConfig
 from .point_rotation import PointCloud
-from .mesh import create_icosahedral_mesh, create_icosahedral_mesh_latlon
+from .mesh import create_sphere_mesh_latlon
 from .mor_seeds import generate_mor_seeds
 from .boundaries import ContinentalPolygonCache
 from .initial_conditions import compute_initial_ages, default_age_distance_law
@@ -59,7 +59,7 @@ class SeafloorAgeTracker:
     ...     continental_polygons='continents.gpmlz'
     ... )
     >>>
-    >>> # Initialize with icosahedral mesh (GPlately-compatible)
+    >>> # Initialize with sphere mesh (GPlately-compatible)
     >>> tracker.initialize(starting_age=200)
     >>>
     >>> # Step forward (decreasing geological age toward present)
@@ -131,8 +131,8 @@ class SeafloorAgeTracker:
     def initialize(
         self,
         starting_age: float,
-        method: str = 'icosahedral',
-        refinement_levels: Optional[int] = None,
+        method: str = 'mesh',
+        n_points: Optional[int] = None,
         initial_ocean_mean_spreading_rate: Optional[float] = None,
         age_distance_law: Optional[Callable[[np.ndarray, float], np.ndarray]] = None,
     ) -> int:
@@ -144,12 +144,12 @@ class SeafloorAgeTracker:
         starting_age : float
             Starting geological age (Ma). Tracers are placed based on
             ocean structure at this age.
-        method : str, default='icosahedral'
+        method : str, default='mesh'
             Initialization method:
-            - 'icosahedral': Full ocean mesh with computed ages (GPlately-compatible)
+            - 'mesh': Full ocean mesh with computed ages (GPlately-compatible)
             - 'ridge_only': Tracers only at ridges with age=0 (legacy gtrack)
-        refinement_levels : int, optional
-            Icosahedral mesh refinement level. If None, uses config default.
+        n_points : int, optional
+            Number of points for the sphere mesh. If None, uses config default.
         initial_ocean_mean_spreading_rate : float, optional
             Spreading rate for age calculation (mm/yr). If None, uses config default.
         age_distance_law : callable, optional
@@ -167,24 +167,24 @@ class SeafloorAgeTracker:
         >>> tracker.initialize(starting_age=200)
         >>>
         >>> # Higher resolution
-        >>> tracker.initialize(starting_age=200, refinement_levels=6)
+        >>> tracker.initialize(starting_age=200, n_points=40000)
         >>>
         >>> # Custom age calculation
         >>> def my_age_law(distances, rate):
         ...     return distances / (rate / 2) * 1.1  # 10% older
         >>> tracker.initialize(starting_age=200, age_distance_law=my_age_law)
         """
-        if refinement_levels is None:
-            refinement_levels = self._config.default_refinement_levels
+        if n_points is None:
+            n_points = self._config.default_mesh_points
         if initial_ocean_mean_spreading_rate is None:
             initial_ocean_mean_spreading_rate = self._config.initial_ocean_mean_spreading_rate
 
         logger.info(f"Initializing tracers at {starting_age} Ma (method='{method}')...")
 
-        if method == 'icosahedral':
-            self._initialize_icosahedral(
+        if method == 'mesh':
+            self._initialize_mesh(
                 starting_age,
-                refinement_levels,
+                n_points,
                 initial_ocean_mean_spreading_rate,
                 age_distance_law,
             )
@@ -200,18 +200,18 @@ class SeafloorAgeTracker:
 
         return len(self._lats)
 
-    def _initialize_icosahedral(
+    def _initialize_mesh(
         self,
         starting_age: float,
-        refinement_levels: int,
+        n_points: int,
         spreading_rate: float,
         age_distance_law: Optional[Callable],
     ):
-        """Initialize with icosahedral mesh (GPlately-compatible)."""
-        logger.debug(f"  Creating icosahedral mesh (level {refinement_levels})...")
+        """Initialize with sphere mesh (GPlately-compatible)."""
+        logger.debug(f"  Creating sphere mesh ({n_points:,} points)...")
 
-        # Create icosahedral mesh and get lat/lon coordinates directly
-        mesh_lats, mesh_lons = create_icosahedral_mesh_latlon(refinement_levels)
+        # Create sphere mesh and get lat/lon coordinates directly
+        mesh_lats, mesh_lons = create_sphere_mesh_latlon(n_points)
 
         logger.debug(f"  Created mesh with {len(mesh_lats)} points")
 
@@ -517,14 +517,14 @@ class SeafloorAgeTracker:
 
     def reinitialize(
         self,
-        refinement_levels: Optional[int] = None,
+        n_points: Optional[int] = None,
         max_distance_km: Optional[float] = None,
         k_neighbors: int = 3,
     ) -> PointCloud:
         """
-        Reinitialize the tracer field with a new icosahedral mesh.
+        Reinitialize the tracer field with a new sphere mesh.
 
-        Generates a fresh icosahedral mesh and interpolates ages from existing
+        Generates a fresh sphere mesh and interpolates ages from existing
         tracers using inverse distance weighting. Points without nearby tracers
         (beyond max_distance_km) are dropped.
 
@@ -534,12 +534,12 @@ class SeafloorAgeTracker:
 
         Parameters
         ----------
-        refinement_levels : int, optional
-            Mesh refinement level. If None, uses config.default_refinement_levels.
+        n_points : int, optional
+            Number of points for the mesh. If None, uses config.default_mesh_points.
         max_distance_km : float, optional
             Maximum distance in kilometers to search for neighbors. Points with
             no neighbors within this distance are dropped (no age data means gap).
-            If None, calculated as 2× the mesh spacing for the given refinement level.
+            If None, calculated as 2× the mesh spacing for the given number of points.
         k_neighbors : int, default=3
             Number of nearest neighbors for inverse distance weighting.
             Use k_neighbors=1 for simple nearest-neighbor interpolation.
@@ -561,7 +561,7 @@ class SeafloorAgeTracker:
         >>> tracker.initialize(starting_age=200)
         >>> tracker.step_to(150)
         >>> # Reinitialize with higher resolution mesh
-        >>> cloud = tracker.reinitialize(refinement_levels=6)
+        >>> cloud = tracker.reinitialize(n_points=40000)
         >>> tracker.step_to(100)  # Continue time-stepping
         """
         if not self._initialized:
@@ -573,18 +573,18 @@ class SeafloorAgeTracker:
         from .geometry import inverse_distance_weighted_interpolation, compute_mesh_spacing_km
 
         # Set defaults
-        if refinement_levels is None:
-            refinement_levels = self._config.default_refinement_levels
+        if n_points is None:
+            n_points = self._config.default_mesh_points
 
         if max_distance_km is None:
             # Default: 2× mesh spacing
-            max_distance_km = 2.0 * compute_mesh_spacing_km(refinement_levels)
+            max_distance_km = 2.0 * compute_mesh_spacing_km(n_points)
 
         # Convert max_distance to meters for KDTree queries
         max_distance_m = max_distance_km * 1000.0
 
         logger.info(
-            f"Reinitializing to icosahedral mesh (level {refinement_levels}, "
+            f"Reinitializing to sphere mesh ({n_points:,} points, "
             f"max_distance={max_distance_km:.1f} km, k={k_neighbors})..."
         )
 
@@ -592,8 +592,8 @@ class SeafloorAgeTracker:
         if len(self._lats) == 0:
             raise ValueError("No existing tracers to interpolate from")
 
-        # Create new icosahedral mesh
-        mesh_lats, mesh_lons = create_icosahedral_mesh_latlon(refinement_levels)
+        # Create new sphere mesh
+        mesh_lats, mesh_lons = create_sphere_mesh_latlon(n_points)
         n_mesh = len(mesh_lats)
         logger.debug(f"  Created mesh with {n_mesh} points")
 
@@ -671,7 +671,7 @@ class SeafloorAgeTracker:
     # Keep old name as alias for backwards compatibility
     def reinitialize_to_mesh(
         self,
-        refinement_levels: Optional[int] = None,
+        n_points: Optional[int] = None,
         k_neighbors: Optional[int] = None,
         max_distance: Optional[float] = None,
     ) -> int:
@@ -691,7 +691,7 @@ class SeafloorAgeTracker:
         k = k_neighbors if k_neighbors is not None else 3
 
         self.reinitialize(
-            refinement_levels=refinement_levels,
+            n_points=n_points,
             max_distance_km=max_distance_km,
             k_neighbors=k,
         )

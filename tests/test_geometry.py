@@ -302,33 +302,33 @@ class TestIDWInterpolation:
 class TestMeshSpacing:
     """Test mesh spacing calculation."""
 
-    def test_mesh_spacing_level_0(self):
-        """Test mesh spacing at refinement level 0 (12 points)."""
-        spacing = compute_mesh_spacing_km(0)
+    def test_mesh_spacing_small_mesh(self):
+        """Test mesh spacing with 12 points."""
+        spacing = compute_mesh_spacing_km(12)
         # 12 points on Earth: spacing should be ~6500 km
         assert 5000 < spacing < 8000
 
-    def test_mesh_spacing_level_5(self):
-        """Test mesh spacing at refinement level 5 (~10k points)."""
-        spacing = compute_mesh_spacing_km(5)
-        # Level 5 has ~10,242 points, spacing ~220 km
+    def test_mesh_spacing_10k_points(self):
+        """Test mesh spacing with ~10k points."""
+        spacing = compute_mesh_spacing_km(10000)
+        # ~10,000 points, spacing ~220 km
         assert 150 < spacing < 300
 
-    def test_mesh_spacing_decreases_with_level(self):
-        """Test that mesh spacing decreases with higher refinement."""
-        spacing_4 = compute_mesh_spacing_km(4)
-        spacing_5 = compute_mesh_spacing_km(5)
-        spacing_6 = compute_mesh_spacing_km(6)
+    def test_mesh_spacing_decreases_with_points(self):
+        """Test that mesh spacing decreases with more points."""
+        spacing_2500 = compute_mesh_spacing_km(2500)
+        spacing_10000 = compute_mesh_spacing_km(10000)
+        spacing_40000 = compute_mesh_spacing_km(40000)
 
-        assert spacing_4 > spacing_5 > spacing_6
+        assert spacing_2500 > spacing_10000 > spacing_40000
 
-    def test_mesh_spacing_halves_per_level(self):
-        """Test that spacing roughly halves per refinement level."""
-        spacing_4 = compute_mesh_spacing_km(4)
-        spacing_5 = compute_mesh_spacing_km(5)
+    def test_mesh_spacing_quadruples_halves(self):
+        """Test that spacing halves when points quadruple."""
+        spacing_10k = compute_mesh_spacing_km(10000)
+        spacing_40k = compute_mesh_spacing_km(40000)
 
-        # Each level multiplies points by 4, so spacing should halve
-        ratio = spacing_4 / spacing_5
+        # Quadrupling points should halve spacing
+        ratio = spacing_10k / spacing_40k
         np.testing.assert_allclose(ratio, 2.0, rtol=0.1)
 
 

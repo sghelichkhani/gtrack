@@ -17,7 +17,7 @@ class TestTracerConfig:
         assert config.earth_radius == 6.3781e6
         assert config.velocity_delta_threshold == 7.0
         assert config.distance_threshold_per_myr == 10.0
-        assert config.default_refinement_levels == 5
+        assert config.default_mesh_points == 10000
         assert config.initial_ocean_mean_spreading_rate == 75.0
         assert config.ridge_sampling_degrees == 0.5
         assert config.spreading_offset_degrees == 0.01
@@ -26,12 +26,12 @@ class TestTracerConfig:
         """Test custom configuration."""
         config = TracerConfig(
             time_step=0.5,
-            default_refinement_levels=6,
+            default_mesh_points=40000,
             ridge_sampling_degrees=0.25
         )
 
         assert config.time_step == 0.5
-        assert config.default_refinement_levels == 6
+        assert config.default_mesh_points == 40000
         assert config.ridge_sampling_degrees == 0.25
         # Other values should be defaults
         assert config.velocity_delta_threshold == 7.0
@@ -42,9 +42,9 @@ class TestTracerConfig:
         with pytest.raises(ValueError, match="time_step"):
             TracerConfig(time_step=-1)
 
-        # Negative refinement levels should raise error
-        with pytest.raises(ValueError, match="default_refinement_levels"):
-            TracerConfig(default_refinement_levels=-1)
+        # Zero mesh points should raise error
+        with pytest.raises(ValueError, match="default_mesh_points"):
+            TracerConfig(default_mesh_points=0)
 
         # Non-positive spreading rate should raise error
         with pytest.raises(ValueError, match="initial_ocean_mean_spreading_rate"):
@@ -58,18 +58,18 @@ class TestTracerConfig:
         assert isinstance(config_dict, dict)
         assert config_dict['time_step'] == 0.5
         assert 'velocity_delta_threshold' in config_dict
-        assert 'default_refinement_levels' in config_dict
+        assert 'default_mesh_points' in config_dict
 
     def test_config_from_dict(self):
         """Test creation from dictionary."""
         config_dict = {
             'time_step': 0.5,
-            'default_refinement_levels': 6,
+            'default_mesh_points': 40000,
         }
         config = TracerConfig.from_dict(config_dict)
 
         assert config.time_step == 0.5
-        assert config.default_refinement_levels == 6
+        assert config.default_mesh_points == 40000
 
     def test_velocity_threshold_conversion(self):
         """Test velocity threshold unit conversion property."""
@@ -80,20 +80,20 @@ class TestTracerConfig:
 
 
 class TestMeshGeneration:
-    """Test icosahedral mesh generation."""
+    """Test Fibonacci sphere mesh generation."""
 
-    def test_create_icosahedral_mesh_latlon(self):
-        """Test icosahedral mesh creation returning lat/lon."""
-        from gtrack.mesh import create_icosahedral_mesh_latlon, mesh_point_count
+    def test_create_sphere_mesh_latlon(self):
+        """Test sphere mesh creation returning lat/lon."""
+        from gtrack.mesh import create_sphere_mesh_latlon
 
-        lats, lons = create_icosahedral_mesh_latlon(refinement_levels=3)
+        n_points = 1000
+        lats, lons = create_sphere_mesh_latlon(n_points)
 
         # Check shapes match
         assert len(lats) == len(lons)
 
-        # Check we get the expected number of points (10 * 4^level + 2)
-        expected = mesh_point_count(3)  # 642 points
-        assert len(lats) == expected
+        # Check we get the expected number of points
+        assert len(lats) == n_points
 
         # Check latitude range
         assert np.all(lats >= -90)
@@ -103,30 +103,39 @@ class TestMeshGeneration:
         assert np.all(lons >= -180)
         assert np.all(lons <= 180)
 
-    def test_create_icosahedral_mesh_xyz(self):
-        """Test icosahedral mesh creation returning XYZ."""
-        from gtrack.mesh import create_icosahedral_mesh_xyz
+    def test_create_sphere_mesh_xyz(self):
+        """Test sphere mesh creation returning XYZ."""
+        from gtrack.mesh import create_sphere_mesh_xyz
 
-        xyz = create_icosahedral_mesh_xyz(refinement_levels=3)
+        n_points = 1000
+        xyz = create_sphere_mesh_xyz(n_points)
 
         # Check shape
-        assert xyz.shape[1] == 3
+        assert xyz.shape == (n_points, 3)
 
         # Check points are on unit sphere (default radius=1)
         radii = np.linalg.norm(xyz, axis=1)
         np.testing.assert_allclose(radii, 1.0, rtol=1e-10)
 
-    def test_mesh_point_count(self):
-        """Test mesh point count formula provides an estimate."""
-        from gtrack.mesh import mesh_point_count
+    def test_create_sphere_mesh_with_radius(self):
+        """Test sphere mesh with custom radius."""
+        from gtrack.mesh import create_sphere_mesh_xyz
 
-        # The formula 10 * 4^level + 2 gives an approximate count
-        # Level 0 should give exactly 12 (original icosahedron)
-        assert mesh_point_count(0) == 12
+        n_points = 500
+        radius = 6.3781e6  # Earth radius
+        xyz = create_sphere_mesh_xyz(n_points, radius=radius)
 
-        # Higher levels grow exponentially
-        assert mesh_point_count(1) > mesh_point_count(0)
-        assert mesh_point_count(5) > 10000
+        # Check points are on sphere with given radius
+        radii = np.linalg.norm(xyz, axis=1)
+        np.testing.assert_allclose(radii, radius, rtol=1e-10)
+
+    def test_create_sphere_mesh_arbitrary_count(self):
+        """Test that we can create meshes with any point count."""
+        from gtrack.mesh import create_sphere_mesh_xyz
+
+        for n_points in [1, 10, 100, 12345, 40000]:
+            xyz = create_sphere_mesh_xyz(n_points)
+            assert len(xyz) == n_points
 
 
 class TestMORSeeds:

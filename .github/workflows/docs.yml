@@ -48,7 +48,7 @@ jobs:
         working-directory: examples
         run: make osf-data
 
-      - name: Interpolate lithospheric data to icosahedral mesh
+      - name: Interpolate lithospheric data to sphere mesh
         working-directory: examples
         run: make litho-data
 

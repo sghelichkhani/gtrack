@@ -1,20 +1,20 @@
-# Interpolate Gridded Data to Icosahedral Mesh
-# ==============================================
+# Interpolate Gridded Data to Sphere Mesh
+# ========================================
 #
 # This example demonstrates how to interpolate gridded data (e.g., from a
-# NetCDF file) onto an icosahedral mesh using inverse distance weighting (IDW).
+# NetCDF file) onto a sphere mesh using inverse distance weighting (IDW).
 #
-# **Why use an icosahedral mesh?**
+# **Why use a sphere mesh?**
 #
 # Regular lat/lon grids have uneven point density - points cluster near the poles.
-# Icosahedral meshes provide approximately uniform spacing across the sphere,
+# A Fibonacci spiral mesh provides approximately uniform spacing across the sphere,
 # which is ideal for numerical simulations (like gadopt) that use cKDTree
 # interpolation.
 #
 # **How it works:**
 #
 # 1. Load gridded data from NetCDF/HDF5 file
-# 2. Create icosahedral mesh at desired resolution
+# 2. Create sphere mesh with desired number of points (Fibonacci spiral)
 # 3. Use cKDTree to find nearest neighbors on the grid for each mesh point
 # 4. Apply inverse distance weighting (IDW) to interpolate values
 # 5. Save to HDF5 for use in other applications
@@ -26,7 +26,7 @@ import numpy as np
 import h5py
 from scipy.spatial import cKDTree
 
-from gtrack.mesh import create_icosahedral_mesh_xyz, mesh_point_count
+from gtrack.mesh import create_sphere_mesh_xyz
 from gtrack.geometry import (
     LatLon2XYZ, XYZ2LatLon, EARTH_RADIUS,
     inverse_distance_weighted_interpolation
@@ -40,13 +40,13 @@ from gtrack.geometry import (
 # +
 # Default paths - update these for your data
 DEFAULT_INPUT = Path("./lithospheric_thickness_maps/global/SL2013sv/SL2013sv.nc")
-DEFAULT_OUTPUT = Path("./output/lithospheric_thickness_icosahedral.h5")
+DEFAULT_OUTPUT = Path("./output/lithospheric_thickness_mesh.h5")
 
-# Mesh resolution (refinement levels)
-# Level 5: ~10,242 points, ~220 km spacing
-# Level 6: ~40,962 points, ~110 km spacing
-# Level 7: ~163,842 points, ~55 km spacing
-DEFAULT_REFINEMENT = 6
+# Number of points on the sphere mesh
+# 10,000 points: ~110 km average spacing
+# 40,000 points: ~55 km average spacing
+# 160,000 points: ~28 km average spacing
+DEFAULT_NPOINTS = 40000
 
 # Number of neighbors for IDW interpolation
 DEFAULT_K_NEIGHBORS = 4
@@ -106,13 +106,13 @@ def load_netcdf_grid(filepath):
     return lon_flat, lat_flat, values_flat, metadata
 
 
-def interpolate_to_icosahedral(
+def interpolate_to_mesh(
     lon_grid, lat_grid, values,
-    refinement_levels=6,
+    n_points=40000,
     k_neighbors=4
 ):
     """
-    Interpolate gridded data to an icosahedral mesh using IDW.
+    Interpolate gridded data to a sphere mesh using IDW.
 
     Parameters
     ----------
@@ -122,8 +122,8 @@ def interpolate_to_icosahedral(
         Latitude of grid points (degrees), shape (N,).
     values : np.ndarray
         Data values at grid points, shape (N,).
-    refinement_levels : int, default=6
-        Icosahedral mesh refinement level.
+    n_points : int, default=40000
+        Number of points on the sphere mesh.
     k_neighbors : int, default=4
         Number of nearest neighbors for IDW interpolation.
 
@@ -134,11 +134,10 @@ def interpolate_to_icosahedral(
     mesh_values : np.ndarray
         Interpolated values at mesh points, shape (M,).
     """
-    # Create icosahedral mesh (unit sphere coordinates)
-    mesh_xyz_unit = create_icosahedral_mesh_xyz(refinement_levels, radius=1.0)
-    n_mesh = len(mesh_xyz_unit)
+    # Create sphere mesh (unit sphere coordinates)
+    mesh_xyz_unit = create_sphere_mesh_xyz(n_points, radius=1.0)
 
-    print(f"Created icosahedral mesh with {n_mesh:,} points (level {refinement_levels})")
+    print(f"Created sphere mesh with {n_points:,} points")
 
     # Convert grid lat/lon to XYZ on unit sphere for cKDTree
     latlon_grid = np.column_stack([lat_grid, lon_grid])
@@ -229,21 +228,21 @@ def save_to_hdf5(filepath, mesh_xyz, mesh_values, metadata=None):
 def main():
     """Main function with command-line interface."""
     parser = argparse.ArgumentParser(
-        description='Interpolate gridded data to icosahedral mesh using IDW.',
+        description='Interpolate gridded data to sphere mesh using IDW.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Use defaults
-  python interpolate_to_icosahedral.py
+  # Use defaults (40,000 points)
+  python interpolate_to_mesh.py
 
   # Specify input/output files
-  python interpolate_to_icosahedral.py -i data.nc -o output.h5
+  python interpolate_to_mesh.py -i data.nc -o output.h5
 
   # Higher resolution mesh
-  python interpolate_to_icosahedral.py --refinement 7
+  python interpolate_to_mesh.py -n 160000
 
   # More neighbors for smoother interpolation
-  python interpolate_to_icosahedral.py --neighbors 8
+  python interpolate_to_mesh.py -k 8
 """
     )
     parser.add_argument(
@@ -259,11 +258,10 @@ Examples:
         help=f'Output HDF5 file (default: {DEFAULT_OUTPUT})'
     )
     parser.add_argument(
-        '-r', '--refinement',
+        '-n', '--npoints',
         type=int,
-        default=DEFAULT_REFINEMENT,
-        help=f'Mesh refinement level (default: {DEFAULT_REFINEMENT}). '
-             f'Level 5=~10k points, 6=~40k, 7=~160k'
+        default=DEFAULT_NPOINTS,
+        help=f'Number of mesh points (default: {DEFAULT_NPOINTS})'
     )
     parser.add_argument(
         '-k', '--neighbors',
@@ -282,11 +280,11 @@ Examples:
 
     # Print configuration
     print("=" * 60)
-    print("Interpolate Gridded Data to Icosahedral Mesh")
+    print("Interpolate Gridded Data to Sphere Mesh")
     print("=" * 60)
     print(f"Input file:        {args.input}")
     print(f"Output file:       {args.output}")
-    print(f"Refinement level:  {args.refinement} ({mesh_point_count(args.refinement):,} points)")
+    print(f"Mesh points:       {args.npoints:,}")
     print(f"IDW neighbors:     {args.neighbors}")
     print("=" * 60)
 
@@ -296,16 +294,16 @@ Examples:
     print(f"  Grid size: {metadata['n_lon']} x {metadata['n_lat']} = {len(values):,} points")
     print(f"  Value range: {metadata['value_range'][0]:.2f} to {metadata['value_range'][1]:.2f}")
 
-    # Interpolate to icosahedral mesh
-    print("\nInterpolating to icosahedral mesh...")
-    mesh_xyz, mesh_values = interpolate_to_icosahedral(
+    # Interpolate to sphere mesh
+    print("\nInterpolating to sphere mesh...")
+    mesh_xyz, mesh_values = interpolate_to_mesh(
         lon_grid, lat_grid, values,
-        refinement_levels=args.refinement,
+        n_points=args.npoints,
         k_neighbors=args.neighbors
     )
 
     # Update metadata
-    metadata['refinement_levels'] = args.refinement
+    metadata['n_points'] = args.npoints
     metadata['k_neighbors'] = args.neighbors
     metadata['interpolated_range'] = (float(np.nanmin(mesh_values)), float(np.nanmax(mesh_values)))
 
@@ -341,9 +339,9 @@ if __name__ == '__main__':
 # You can also use the functions directly in Python:
 #
 # ```python
-# from interpolate_to_icosahedral import (
+# from interpolate_to_mesh import (
 #     load_netcdf_grid,
-#     interpolate_to_icosahedral,
+#     interpolate_to_mesh,
 #     save_to_hdf5
 # )
 #
@@ -351,10 +349,10 @@ if __name__ == '__main__':
 # lon, lat, values, meta = load_netcdf_grid('my_data.nc')
 #
 # # Interpolate with custom settings
-# xyz, interp_values = interpolate_to_icosahedral(
+# xyz, interp_values = interpolate_to_mesh(
 #     lon, lat, values,
-#     refinement_levels=7,  # Higher resolution
-#     k_neighbors=8         # More neighbors for smoother result
+#     n_points=160000,  # Higher resolution
+#     k_neighbors=8     # More neighbors for smoother result
 # )
 #
 # # Save
@@ -376,5 +374,4 @@ if __name__ == '__main__':
 #
 #     # Access metadata
 #     n_points = f.attrs['n_points']
-#     refinement = f.attrs['refinement_levels']
 # ```

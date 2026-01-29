@@ -77,10 +77,8 @@ from .io_formats import (
 
 # Utility modules (for advanced users)
 from .mesh import (
-    create_icosahedral_mesh,
-    create_icosahedral_mesh_latlon,
-    create_icosahedral_mesh_xyz,
-    mesh_point_count,
+    create_sphere_mesh_xyz,
+    create_sphere_mesh_latlon,
 )
 from .mor_seeds import (
     generate_mor_seeds,
@@ -122,10 +120,8 @@ __all__ = [
     "save_points_gpml",
     "PointCloudCheckpoint",
     # Mesh generation (advanced)
-    "create_icosahedral_mesh",
-    "create_icosahedral_mesh_latlon",
-    "create_icosahedral_mesh_xyz",
-    "mesh_point_count",
+    "create_sphere_mesh_xyz",
+    "create_sphere_mesh_latlon",
     # MOR seeds (advanced)
     "generate_mor_seeds",
     "generate_mor_seeds_with_plate_ids",

@@ -11,10 +11,10 @@ OSF_PROJECT := twksd
 OSF_FOLDER_ID := 5ecefa09aeeb6d0286087b87
 OSF_DATA_DIR := lithospheric_thickness_maps
 
-# Interpolated lithospheric thickness data (icosahedral mesh)
+# Interpolated lithospheric thickness data (sphere mesh)
 LITHO_NC := $(OSF_DATA_DIR)/global/SL2013sv/SL2013sv.nc
-LITHO_H5 := output/lithospheric_thickness_icosahedral.h5
-LITHO_REFINEMENT := 6
+LITHO_H5 := output/lithospheric_thickness_mesh.h5
+LITHO_NPOINTS := 40000
 
 # Python scripts to convert to notebooks
 EXAMPLE_SCRIPTS := seafloor_age_simple.py seafloor_age_stepwise.py continental_rotation.py
@@ -45,14 +45,14 @@ $(OSF_DATA_DIR):
 	python download_osf_folder.py -p $(OSF_PROJECT) -f $(OSF_FOLDER_ID) -o $(OSF_DATA_DIR)
 	@echo "OSF data download complete."
 
-# Interpolate lithospheric thickness to icosahedral mesh
+# Interpolate lithospheric thickness to sphere mesh
 # This creates uniformly-spaced points suitable for numerical simulations
 litho-data: $(LITHO_H5)
 
 $(LITHO_H5): $(LITHO_NC)
-	@echo "Interpolating lithospheric thickness to icosahedral mesh..."
+	@echo "Interpolating lithospheric thickness to sphere mesh..."
 	@mkdir -p output
-	python interpolate_to_icosahedral.py -i $(LITHO_NC) -o $(LITHO_H5) -r $(LITHO_REFINEMENT)
+	python interpolate_to_mesh.py -i $(LITHO_NC) -o $(LITHO_H5) -n $(LITHO_NPOINTS)
 	@echo "Interpolation complete: $(LITHO_H5)"
 
 $(LITHO_NC): $(OSF_DATA_DIR)
