@@ -28,7 +28,6 @@ classifiers = [
 dependencies = [
     "numpy>=1.20",
     "scipy>=1.7",
-    "stripy>=2.0",
     "pygplates",
 ]
 
