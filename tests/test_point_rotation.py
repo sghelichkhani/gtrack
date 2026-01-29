@@ -168,6 +168,145 @@ class TestPointCloud:
         assert 'depth' in cloud.properties
         assert 'temp' in cloud.properties
 
+    def test_concatenate_two_clouds(self):
+        """Test concatenating two PointClouds with same properties."""
+        xyz1 = normalize_to_sphere(np.random.randn(50, 3))
+        xyz2 = normalize_to_sphere(np.random.randn(30, 3))
+
+        cloud1 = PointCloud(xyz=xyz1)
+        cloud1.add_property('temperature', np.arange(50, dtype=float))
+
+        cloud2 = PointCloud(xyz=xyz2)
+        cloud2.add_property('temperature', np.arange(50, 80, dtype=float))
+
+        merged = PointCloud.concatenate([cloud1, cloud2])
+
+        assert merged.n_points == 80
+        assert merged.xyz.shape == (80, 3)
+        np.testing.assert_allclose(merged.xyz[:50], xyz1)
+        np.testing.assert_allclose(merged.xyz[50:], xyz2)
+        np.testing.assert_array_equal(
+            merged.get_property('temperature'),
+            np.arange(80, dtype=float)
+        )
+
+    def test_concatenate_with_plate_ids(self):
+        """Test concatenating clouds that all have plate_ids."""
+        xyz1 = normalize_to_sphere(np.random.randn(30, 3))
+        xyz2 = normalize_to_sphere(np.random.randn(20, 3))
+
+        cloud1 = PointCloud(xyz=xyz1)
+        cloud1.plate_ids = np.ones(30, dtype=int) * 101
+
+        cloud2 = PointCloud(xyz=xyz2)
+        cloud2.plate_ids = np.ones(20, dtype=int) * 201
+
+        merged = PointCloud.concatenate([cloud1, cloud2])
+
+        assert merged.plate_ids is not None
+        assert len(merged.plate_ids) == 50
+        np.testing.assert_array_equal(merged.plate_ids[:30], 101)
+        np.testing.assert_array_equal(merged.plate_ids[30:], 201)
+
+    def test_concatenate_mixed_plate_ids(self):
+        """Test that mixed plate_ids (some None) results in None with warning."""
+        xyz1 = normalize_to_sphere(np.random.randn(30, 3))
+        xyz2 = normalize_to_sphere(np.random.randn(20, 3))
+
+        cloud1 = PointCloud(xyz=xyz1)
+        cloud1.plate_ids = np.ones(30, dtype=int)
+
+        cloud2 = PointCloud(xyz=xyz2)
+        # cloud2 has no plate_ids
+
+        with pytest.warns(UserWarning, match="Some clouds have plate_ids"):
+            merged = PointCloud.concatenate([cloud1, cloud2])
+
+        assert merged.plate_ids is None
+
+    def test_concatenate_different_properties(self):
+        """Test that different properties result in common subset with warning."""
+        xyz1 = normalize_to_sphere(np.random.randn(30, 3))
+        xyz2 = normalize_to_sphere(np.random.randn(20, 3))
+
+        cloud1 = PointCloud(xyz=xyz1)
+        cloud1.add_property('common', np.ones(30))
+        cloud1.add_property('only_in_1', np.zeros(30))
+
+        cloud2 = PointCloud(xyz=xyz2)
+        cloud2.add_property('common', np.ones(20) * 2)
+        cloud2.add_property('only_in_2', np.zeros(20))
+
+        with pytest.warns(UserWarning, match="not present in all clouds"):
+            merged = PointCloud.concatenate([cloud1, cloud2])
+
+        # Only common property should be present
+        assert 'common' in merged.properties
+        assert 'only_in_1' not in merged.properties
+        assert 'only_in_2' not in merged.properties
+
+        # Check common property values
+        np.testing.assert_array_equal(merged.get_property('common')[:30], 1.0)
+        np.testing.assert_array_equal(merged.get_property('common')[30:], 2.0)
+
+    def test_concatenate_single_cloud(self):
+        """Test that concatenating single cloud returns a copy."""
+        xyz = normalize_to_sphere(np.random.randn(50, 3))
+        cloud = PointCloud(xyz=xyz)
+        cloud.add_property('depth', np.random.rand(50))
+
+        merged = PointCloud.concatenate([cloud])
+
+        assert merged.n_points == cloud.n_points
+        np.testing.assert_allclose(merged.xyz, cloud.xyz)
+
+        # Verify it's a copy (modifying original doesn't affect merged)
+        cloud.xyz[0] = [0, 0, 0]
+        assert merged.xyz[0, 0] != 0
+
+    def test_concatenate_empty_list(self):
+        """Test that concatenating empty list raises ValueError."""
+        with pytest.raises(ValueError, match="Cannot concatenate empty list"):
+            PointCloud.concatenate([])
+
+    def test_concatenate_type_error(self):
+        """Test that non-PointCloud elements raise TypeError."""
+        xyz = normalize_to_sphere(np.random.randn(50, 3))
+        cloud = PointCloud(xyz=xyz)
+
+        with pytest.raises(TypeError, match="expected PointCloud"):
+            PointCloud.concatenate([cloud, "not a cloud"])
+
+    def test_concatenate_three_clouds(self):
+        """Test concatenating three or more clouds."""
+        clouds = []
+        for i in range(3):
+            xyz = normalize_to_sphere(np.random.randn(20, 3))
+            cloud = PointCloud(xyz=xyz)
+            cloud.add_property('index', np.ones(20) * i)
+            clouds.append(cloud)
+
+        merged = PointCloud.concatenate(clouds)
+
+        assert merged.n_points == 60
+        assert merged.xyz.shape == (60, 3)
+        np.testing.assert_array_equal(merged.get_property('index')[:20], 0)
+        np.testing.assert_array_equal(merged.get_property('index')[20:40], 1)
+        np.testing.assert_array_equal(merged.get_property('index')[40:], 2)
+
+    def test_concatenate_no_properties(self):
+        """Test concatenating clouds with no properties."""
+        xyz1 = normalize_to_sphere(np.random.randn(30, 3))
+        xyz2 = normalize_to_sphere(np.random.randn(20, 3))
+
+        cloud1 = PointCloud(xyz=xyz1)
+        cloud2 = PointCloud(xyz=xyz2)
+
+        merged = PointCloud.concatenate([cloud1, cloud2])
+
+        assert merged.n_points == 50
+        assert len(merged.properties) == 0
+
 
 class TestPointCloudIO:
     """Test PointCloud IO functions."""

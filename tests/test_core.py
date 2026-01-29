@@ -84,16 +84,16 @@ class TestMeshGeneration:
 
     def test_create_icosahedral_mesh_latlon(self):
         """Test icosahedral mesh creation returning lat/lon."""
-        from gtrack.mesh import create_icosahedral_mesh_latlon
+        from gtrack.mesh import create_icosahedral_mesh_latlon, mesh_point_count
 
         lats, lons = create_icosahedral_mesh_latlon(refinement_levels=3)
 
         # Check shapes match
         assert len(lats) == len(lons)
 
-        # Check we get a reasonable number of points
-        # Level 3 should produce over 1000 points
-        assert len(lats) > 1000
+        # Check we get the expected number of points (10 * 4^level + 2)
+        expected = mesh_point_count(3)  # 642 points
+        assert len(lats) == expected
 
         # Check latitude range
         assert np.all(lats >= -90)

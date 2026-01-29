@@ -247,6 +247,113 @@ class PointCloud:
             plate_ids=self.plate_ids.copy() if self.plate_ids is not None else None
         )
 
+    @classmethod
+    def concatenate(cls, clouds: List["PointCloud"], warn: bool = True) -> "PointCloud":
+        """
+        Merge multiple PointClouds into a single PointCloud.
+
+        Parameters
+        ----------
+        clouds : list of PointCloud
+            List of PointCloud instances to merge.
+        warn : bool, default=True
+            Whether to emit warnings when properties or plate_ids are
+            dropped due to inconsistency between clouds. Set to False
+            when this is expected behavior.
+
+        Returns
+        -------
+        PointCloud
+            New PointCloud with concatenated data from all input clouds.
+
+        Raises
+        ------
+        ValueError
+            If clouds list is empty.
+        TypeError
+            If any element is not a PointCloud.
+
+        Notes
+        -----
+        - The xyz arrays are vertically stacked.
+        - Properties are merged: only properties present in ALL clouds are included
+          in the result. If clouds have different property sets, a warning is issued
+          and only the common properties are kept.
+        - plate_ids are concatenated only if ALL clouds have them; otherwise
+          the result has plate_ids=None.
+
+        Examples
+        --------
+        >>> cloud1 = PointCloud(xyz=np.random.randn(100, 3))
+        >>> cloud1.add_property('temperature', np.random.rand(100))
+        >>> cloud2 = PointCloud(xyz=np.random.randn(50, 3))
+        >>> cloud2.add_property('temperature', np.random.rand(50))
+        >>> merged = PointCloud.concatenate([cloud1, cloud2])
+        >>> merged.n_points
+        150
+        """
+        # Validate input
+        if not clouds:
+            raise ValueError("Cannot concatenate empty list of PointClouds")
+
+        if len(clouds) == 1:
+            return clouds[0].copy()
+
+        # Type check
+        for i, cloud in enumerate(clouds):
+            if not isinstance(cloud, cls):
+                raise TypeError(
+                    f"Element {i} is {type(cloud).__name__}, expected PointCloud"
+                )
+
+        # Concatenate xyz arrays
+        xyz_arrays = [cloud.xyz for cloud in clouds]
+        merged_xyz = np.vstack(xyz_arrays)
+
+        # Find common properties across all clouds
+        all_property_sets = [set(cloud.properties.keys()) for cloud in clouds]
+        common_properties = set.intersection(*all_property_sets) if all_property_sets else set()
+
+        # Check if any properties are being dropped
+        all_properties = set.union(*all_property_sets) if all_property_sets else set()
+        dropped_properties = all_properties - common_properties
+
+        if dropped_properties and warn:
+            warnings.warn(
+                f"Properties {dropped_properties} are not present in all clouds "
+                f"and will be excluded from the merged result. "
+                f"Only common properties {common_properties} are included.",
+                UserWarning
+            )
+
+        # Merge common properties
+        merged_properties = {}
+        for prop_name in common_properties:
+            prop_arrays = [cloud.properties[prop_name] for cloud in clouds]
+            merged_properties[prop_name] = np.concatenate(prop_arrays)
+
+        # Handle plate_ids: only include if ALL clouds have them
+        all_have_plate_ids = all(cloud.plate_ids is not None for cloud in clouds)
+        if all_have_plate_ids:
+            plate_id_arrays = [cloud.plate_ids for cloud in clouds]
+            merged_plate_ids = np.concatenate(plate_id_arrays)
+        else:
+            merged_plate_ids = None
+            # Warn if some but not all have plate_ids
+            some_have_plate_ids = any(cloud.plate_ids is not None for cloud in clouds)
+            if some_have_plate_ids and warn:
+                warnings.warn(
+                    "Some clouds have plate_ids and some do not. "
+                    "The merged cloud will have plate_ids=None.",
+                    UserWarning
+                )
+
+        return cls(
+            xyz=merged_xyz,
+            properties=merged_properties,
+            plate_ids=merged_plate_ids
+        )
+
     def __len__(self) -> int:
         """Return number of points."""
         return self.n_points

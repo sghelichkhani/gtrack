@@ -119,46 +119,143 @@ def _get_vertices_and_faces_stripy() -> Tuple[np.ndarray, np.ndarray]:
     return vertices_xyz, np.array(_find_faces(vertices_latlon))
 
 
+def _deduplicate_vertices(vertices: np.ndarray, tolerance: float = 1e-10) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Remove duplicate vertices using rounding for numerical stability.
+
+    Parameters
+    ----------
+    vertices : np.ndarray
+        Vertex coordinates, shape (N, 3).
+    tolerance : float
+        Tolerance for considering vertices as duplicates.
+
+    Returns
+    -------
+    unique_vertices : np.ndarray
+        Unique vertices, shape (M, 3) where M <= N.
+    inverse_indices : np.ndarray
+        Mapping from original to unique indices, shape (N,).
+    """
+    # Round coordinates for comparison
+    rounded = np.round(vertices / tolerance).astype(np.int64)
+
+    # Use structured array for efficient unique finding
+    dtype = [('x', np.int64), ('y', np.int64), ('z', np.int64)]
+    structured = np.zeros(len(rounded), dtype=dtype)
+    structured['x'] = rounded[:, 0]
+    structured['y'] = rounded[:, 1]
+    structured['z'] = rounded[:, 2]
+
+    _, unique_idx, inverse_idx = np.unique(
+        structured, return_index=True, return_inverse=True
+    )
+
+    return vertices[unique_idx], inverse_idx
+
+
+def _bisect_one_level(vertices: np.ndarray, faces: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Perform one level of mesh bisection (vectorized).
+
+    Each triangular face is subdivided into 4 smaller triangles by
+    adding midpoints on each edge.
+
+    Parameters
+    ----------
+    vertices : np.ndarray
+        Current vertices, shape (V, 3).
+    faces : np.ndarray
+        Current faces as vertex indices, shape (F, 3).
+
+    Returns
+    -------
+    new_vertices : np.ndarray
+        Vertices after refinement (deduplicated).
+    new_faces : np.ndarray
+        Faces after refinement.
+    """
+    n_faces = len(faces)
+    n_verts = len(vertices)
+
+    # Get all face vertices at once (vectorized)
+    v0 = vertices[faces[:, 0]]  # (n_faces, 3)
+    v1 = vertices[faces[:, 1]]
+    v2 = vertices[faces[:, 2]]
+
+    # Compute all midpoints at once (vectorized)
+    m01 = (v0 + v1) * 0.5  # midpoint of edge 0-1
+    m12 = (v1 + v2) * 0.5  # midpoint of edge 1-2
+    m20 = (v2 + v0) * 0.5  # midpoint of edge 2-0
+
+    # Normalize all midpoints to unit sphere (vectorized)
+    m01 = m01 / np.linalg.norm(m01, axis=1, keepdims=True)
+    m12 = m12 / np.linalg.norm(m12, axis=1, keepdims=True)
+    m20 = m20 / np.linalg.norm(m20, axis=1, keepdims=True)
+
+    # Stack all vertices: original + new midpoints
+    # Midpoints will have duplicates at shared edges
+    all_verts = np.vstack([vertices, m01, m12, m20])
+
+    # Deduplicate vertices
+    unique_verts, inverse = _deduplicate_vertices(all_verts)
+
+    # Map original vertex indices through inverse mapping
+    idx_v0 = inverse[faces[:, 0]]
+    idx_v1 = inverse[faces[:, 1]]
+    idx_v2 = inverse[faces[:, 2]]
+
+    # Map midpoint indices through inverse mapping
+    # m01 starts at index n_verts
+    # m12 starts at index n_verts + n_faces
+    # m20 starts at index n_verts + 2*n_faces
+    idx_m01 = inverse[n_verts + np.arange(n_faces)]
+    idx_m12 = inverse[n_verts + n_faces + np.arange(n_faces)]
+    idx_m20 = inverse[n_verts + 2 * n_faces + np.arange(n_faces)]
+
+    # Create 4 new faces per old face (vectorized)
+    # Face layout after subdivision:
+    #       v0
+    #      /  \
+    #    m20--m01
+    #    / \  / \
+    #  v2--m12--v1
+    new_faces = np.vstack([
+        np.column_stack([idx_v0, idx_m01, idx_m20]),   # top triangle
+        np.column_stack([idx_m01, idx_v1, idx_m12]),   # right triangle
+        np.column_stack([idx_m20, idx_m12, idx_v2]),   # left triangle
+        np.column_stack([idx_m01, idx_m12, idx_m20]),  # center triangle
+    ])
+
+    return unique_verts, new_faces
+
+
 def _bisect(vertices: np.ndarray, faces: np.ndarray, level: int = 3) -> Tuple[np.ndarray, np.ndarray]:
-    """Recursively bisect icosahedron faces to refine the mesh."""
-    if level == 0:
-        return vertices, faces
+    """
+    Recursively bisect icosahedron faces to refine the mesh.
 
-    new_vertices = vertices
-    new_faces = None
+    Uses vectorized operations and vertex deduplication for efficiency.
+    Each level multiplies the number of faces by 4.
 
-    for face in faces:
-        v0 = vertices[face[0]]
-        v1 = vertices[face[1]]
-        v2 = vertices[face[2]]
+    Parameters
+    ----------
+    vertices : np.ndarray
+        Initial vertices, shape (V, 3).
+    faces : np.ndarray
+        Initial faces as vertex indices, shape (F, 3).
+    level : int
+        Number of refinement levels.
 
-        # Create midpoints and normalize to sphere
-        v3 = _normalize(0.5 * (v0 + v1))
-        v4 = _normalize(0.5 * (v1 + v2))
-        v5 = _normalize(0.5 * (v2 + v0))
-
-        new_vertices = np.append(new_vertices, [v3, v4, v5], axis=0)
-        v_len = new_vertices.shape[0]
-
-        idx_v0, idx_v1, idx_v2 = face[0], face[1], face[2]
-        idx_v3 = v_len - 3
-        idx_v4 = v_len - 2
-        idx_v5 = v_len - 1
-
-        # Create 4 new faces from the original face
-        tmp = np.array([
-            [idx_v0, idx_v3, idx_v5],
-            [idx_v3, idx_v1, idx_v4],
-            [idx_v4, idx_v2, idx_v5],
-            [idx_v3, idx_v4, idx_v5],
-        ])
-
-        if new_faces is None:
-            new_faces = tmp
-        else:
-            new_faces = np.append(new_faces, tmp, axis=0)
-
-    return _bisect(new_vertices, new_faces, level - 1)
+    Returns
+    -------
+    vertices : np.ndarray
+        Refined vertices.
+    faces : np.ndarray
+        Refined faces.
+    """
+    for _ in range(level):
+        vertices, faces = _bisect_one_level(vertices, faces)
+    return vertices, faces
 
 
 def _xyz_to_lonlat(x: float, y: float, z: float) -> Tuple[float, float]:
