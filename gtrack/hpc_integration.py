@@ -75,16 +75,10 @@ class SeafloorAgeTracker:
         topology_files: Union[str, List[str]],
         continental_polygons: Optional[str] = None,
         config: Optional[TracerConfig] = None,
-        verbose: bool = True,
     ):
         from .geometry import ensure_list
 
         self._config = config if config else TracerConfig()
-
-        # Handle deprecated verbose flag
-        if verbose:
-            from .logging import enable_verbose
-            enable_verbose()
 
         # Handle single file or Path as list
         rotation_files = ensure_list(rotation_files)
@@ -794,7 +788,6 @@ class SeafloorAgeTracker:
         topology_files: Union[str, List[str]],
         continental_polygons: Optional[str] = None,
         config: Optional[TracerConfig] = None,
-        verbose: bool = True,
     ) -> PointCloud:
         """
         One-shot computation of seafloor ages (functional interface).
@@ -816,8 +809,6 @@ class SeafloorAgeTracker:
             Path to continental polygon file.
         config : TracerConfig, optional
             Configuration parameters.
-        verbose : bool, default=True
-            Print progress information.
 
         Returns
         -------
@@ -839,7 +830,6 @@ class SeafloorAgeTracker:
             topology_files=topology_files,
             continental_polygons=continental_polygons,
             config=config,
-            verbose=verbose,
         )
 
         tracker.initialize(starting_age)

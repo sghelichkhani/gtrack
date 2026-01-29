@@ -46,7 +46,7 @@ Example
 ...     cloud = tracker.step_to(age)
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.1"
 
 # Logging configuration (import first to configure before other modules)
 from .logging import (
@@ -57,6 +57,9 @@ from .logging import (
     disable_logging,
     get_logger,
 )
+
+# Configure logging with default level (WARNING) immediately on import
+configure_logging()
 
 # Core seafloor age functionality
 from .config import TracerConfig
