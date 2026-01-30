@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
+import pygplates
+from shapely.geometry.polygon import LinearRing
 
 from gtrack import SeafloorAgeTracker, TracerConfig
 # -
@@ -56,6 +58,9 @@ topology_files = [
 # removed when entering continental regions
 continental_polygons = data_dir / \
     "ContPolys/PresentDay_ContinentalPolygons_Matthews++.shp"
+
+# Coastlines for plotting reconstructed continental outlines
+coastlines_file = data_dir / "Coastlines/Coastlines_low_res_Matthews++.gpml"
 
 output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
@@ -104,8 +109,8 @@ config = TracerConfig(
     initial_ocean_mean_spreading_rate=75.0,  # mm/yr
 
     # MOR seed generation
-    ridge_sampling_degrees=4.0,    # Ridge point spacing in degrees
-    spreading_offset_degrees=0.01,  # Offset from ridge axis in degrees
+    ridge_sampling_degrees=0.5,    # Ridge tessellation (~50 km at equator)
+    spreading_offset_degrees=0.01,  # Offset from ridge (~1 km)
 
     # Collision detection thresholds
     velocity_delta_threshold=7.0,      # km/Myr velocity change to trigger check
@@ -158,13 +163,20 @@ print(f"Initialised {n_tracers} tracers at {starting_age} Ma")
 # - 0 Ma (present day)
 
 # +
+# Load pygplates rotation model and coastlines for plotting reconstructed
+# continental outlines at past geological ages.
+rotation_model = pygplates.RotationModel([str(f) for f in rotation_files])
+coastlines = pygplates.FeatureCollection(str(coastlines_file))
+# -
+
+# +
 # We define a helper function to plot the tracer field at each age.
 # This keeps the code clean and avoids repetition as we step through
 # multiple geological ages.
 
 
-def plot_tracers(cloud, geological_age):
-    """Plot tracer positions coloured by material age."""
+def plot_tracers(cloud, geological_age, rotation_model, coastlines):
+    """Plot tracer positions coloured by material age with reconstructed coastlines."""
     lonlat = cloud.lonlat
     ages = cloud.get_property('age')
 
@@ -176,11 +188,32 @@ def plot_tracers(cloud, geological_age):
         c=ages,
         s=1,
         cmap='viridis_r',
-        vmin=0, vmax=max(50, ages.max()),
+        vmin=0, vmax=200,
         transform=ccrs.PlateCarree()
     )
 
-    ax.coastlines(resolution='110m', linewidth=0.5)
+    # Reconstruct coastlines to the target geological age
+    reconstructed_coastlines = []
+    pygplates.reconstruct(coastlines, rotation_model,
+                          reconstructed_coastlines, float(geological_age))
+
+    # Handle dateline wrapping and convert to shapely geometries
+    date_line_wrapper = pygplates.DateLineWrapper(0.0)
+    coastline_geometries = []
+    for polygon in reconstructed_coastlines:
+        wrapped_polygons = date_line_wrapper.wrap(
+            polygon.get_reconstructed_geometry())
+        for poly in wrapped_polygons:
+            coastline_geometries.append(
+                LinearRing([(p.get_longitude(), p.get_latitude())
+                            for p in poly.get_exterior_points()])
+            )
+
+    # Plot reconstructed coastlines
+    ax.add_geometries(coastline_geometries, ccrs.PlateCarree(),
+                      facecolor='none', edgecolor='black',
+                      linewidth=0.5, alpha=0.8)
+
     ax.set_global()
 
     cbar = plt.colorbar(scatter, ax=ax, orientation='horizontal',
@@ -208,26 +241,26 @@ def plot_tracers(cloud, geological_age):
 
 # +
 cloud = tracker.step_to(295)
-plot_tracers(cloud, 295)
+plot_tracers(cloud, 295, rotation_model, coastlines)
 # -
 
 # ### After 20 Myr (280 Ma)
 
 # +
 cloud = tracker.step_to(280)
-plot_tracers(cloud, 280)
+plot_tracers(cloud, 280, rotation_model, coastlines)
 # -
 
 # ### At 100 Ma (200 Myr of evolution)
 
 # +
 cloud = tracker.step_to(100)
-plot_tracers(cloud, 100)
+plot_tracers(cloud, 100, rotation_model, coastlines)
 # -
 
 # ### Present Day (0 Ma)
 
 # +
 cloud = tracker.step_to(0)
-plot_tracers(cloud, 0)
+plot_tracers(cloud, 0, rotation_model, coastlines)
 # -
