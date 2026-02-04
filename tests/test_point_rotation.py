@@ -48,6 +48,67 @@ class TestPointCloud:
         distances = np.linalg.norm(cloud.xyz, axis=1)
         np.testing.assert_allclose(distances, EARTH_RADIUS, rtol=1e-10)
 
+    def test_from_xyz_basic(self):
+        """Test creating PointCloud via from_xyz classmethod."""
+        xyz = normalize_to_sphere(np.random.randn(50, 3))
+        cloud = PointCloud.from_xyz(xyz)
+
+        assert cloud.n_points == 50
+        np.testing.assert_allclose(cloud.xyz, xyz)
+        assert cloud.plate_ids is None
+        assert len(cloud.properties) == 0
+
+    def test_from_xyz_with_properties(self):
+        """Test from_xyz passes properties correctly."""
+        xyz = normalize_to_sphere(np.random.randn(30, 3))
+        props = {'depth': np.random.rand(30), 'temp': np.random.rand(30)}
+        cloud = PointCloud.from_xyz(xyz, properties=props)
+
+        assert cloud.n_points == 30
+        assert 'depth' in cloud.properties
+        assert 'temp' in cloud.properties
+
+    def test_from_xyz_normalize_to_earth(self):
+        """Test from_xyz with normalize_to_earth scales to Earth's radius."""
+        # Points on unit sphere
+        xyz_unit = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        cloud = PointCloud.from_xyz(xyz_unit, normalize_to_earth=True)
+
+        distances = np.linalg.norm(cloud.xyz, axis=1)
+        np.testing.assert_allclose(distances, EARTH_RADIUS, rtol=1e-10)
+
+    def test_from_xyz_normalize_arbitrary_radius(self):
+        """Test from_xyz normalizes points at arbitrary radii to Earth's radius."""
+        # Points at radius 100
+        xyz = np.array([[100.0, 0.0, 0.0], [0.0, 0.0, 50.0]])
+        cloud = PointCloud.from_xyz(xyz, normalize_to_earth=True)
+
+        distances = np.linalg.norm(cloud.xyz, axis=1)
+        np.testing.assert_allclose(distances, EARTH_RADIUS, rtol=1e-10)
+
+        # Direction should be preserved
+        direction_original = xyz / np.linalg.norm(xyz, axis=1, keepdims=True)
+        direction_result = cloud.xyz / np.linalg.norm(cloud.xyz, axis=1, keepdims=True)
+        np.testing.assert_allclose(direction_result, direction_original, atol=1e-10)
+
+    def test_from_xyz_no_normalize(self):
+        """Test from_xyz without normalization preserves coordinates exactly."""
+        xyz = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        cloud = PointCloud.from_xyz(xyz, normalize_to_earth=False)
+
+        np.testing.assert_array_equal(cloud.xyz, xyz)
+
+    def test_from_xyz_near_zero_vector(self):
+        """Test from_xyz handles near-zero vectors without crashing."""
+        xyz = np.array([[1e-15, 1e-15, 1e-15], [1.0, 0.0, 0.0]])
+        cloud = PointCloud.from_xyz(xyz, normalize_to_earth=True)
+
+        # Should not raise; second point should be at Earth's radius
+        distances = np.linalg.norm(cloud.xyz, axis=1)
+        np.testing.assert_allclose(distances[1], EARTH_RADIUS, rtol=1e-10)
+        # First point (near-zero) should still produce a finite result
+        assert np.all(np.isfinite(cloud.xyz[0]))
+
     def test_latlon_property(self):
         """Test that latlon property correctly converts from XYZ."""
         original_latlon = np.array([

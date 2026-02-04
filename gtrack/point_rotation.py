@@ -148,6 +148,55 @@ class PointCloud:
         xyz = LatLon2XYZ(latlon)
         return cls(xyz=xyz, properties=properties or {})
 
+    @classmethod
+    def from_xyz(
+        cls,
+        xyz: np.ndarray,
+        properties: Optional[Dict[str, np.ndarray]] = None,
+        normalize_to_earth: bool = False
+    ) -> "PointCloud":
+        """
+        Create PointCloud from Cartesian XYZ coordinates.
+
+        This is a convenience classmethod that provides symmetry with from_latlon.
+        It can optionally normalize points to Earth's surface.
+
+        Parameters
+        ----------
+        xyz : np.ndarray
+            Cartesian coordinates, shape (N, 3).
+        properties : dict, optional
+            Properties to attach to the points.
+        normalize_to_earth : bool, default=False
+            If True, normalize points to Earth's radius (~6.3781e6 m).
+            Useful when input points are on a unit sphere.
+
+        Returns
+        -------
+        PointCloud
+            New PointCloud with the given XYZ coordinates.
+
+        Examples
+        --------
+        >>> # Points already at Earth's radius
+        >>> xyz = np.array([[6378100, 0, 0], [0, 6378100, 0]])
+        >>> cloud = PointCloud.from_xyz(xyz)
+        >>>
+        >>> # Points on unit sphere, scale to Earth
+        >>> xyz_unit = np.array([[1, 0, 0], [0, 1, 0]])
+        >>> cloud = PointCloud.from_xyz(xyz_unit, normalize_to_earth=True)
+        """
+        from .geometry import EARTH_RADIUS
+        xyz = np.asarray(xyz)
+
+        if normalize_to_earth:
+            # Normalize to unit sphere, then scale to Earth's radius
+            norms = np.linalg.norm(xyz, axis=1, keepdims=True)
+            norms = np.maximum(norms, 1e-10)  # Avoid division by zero
+            xyz = xyz / norms * EARTH_RADIUS
+
+        return cls(xyz=xyz, properties=properties or {})
+
     def add_property(self, name: str, values: np.ndarray) -> None:
         """
         Add or update a property.
