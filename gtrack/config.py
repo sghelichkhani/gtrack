@@ -51,7 +51,7 @@ class TracerConfig:
     --------------------
     continental_cache_size : int
         Number of timesteps to cache for continental polygon queries.
-        Default: 10
+        Default: 5
 
     Reinitialization
     ----------------
@@ -93,7 +93,7 @@ class TracerConfig:
     spreading_offset_degrees: float = 0.01  # ~1 km offset from ridge
 
     # Continental polygon caching
-    continental_cache_size: int = 10
+    continental_cache_size: int = 5
 
     # Reinitialization parameters
     reinit_k_neighbors: int = 5
