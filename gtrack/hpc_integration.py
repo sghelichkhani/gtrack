@@ -5,6 +5,7 @@ This module provides the main API for computing seafloor ages
 using pygplates' C++ backend for efficient reconstruction.
 """
 
+import gc
 import numpy as np
 from typing import Callable, Dict, List, Optional, Union
 
@@ -103,12 +104,14 @@ class SeafloorAgeTracker:
             self._topology_features, self._rotation_model
         )
 
-        # Set up continental polygon cache
+        # Set up continental polygon cache.  During forward time-stepping at
+        # most 2 distinct snapped times are ever active (current interval
+        # boundary and the next), so a small cache suffices.
         if continental_polygons is not None:
             self._continental_cache = ContinentalPolygonCache(
                 continental_polygons,
                 self._rotation_model,
-                max_cache_size=self._config.continental_cache_size,
+                max_cache_size=2,
             )
         else:
             self._continental_cache = None
@@ -119,6 +122,7 @@ class SeafloorAgeTracker:
         self._lons: Optional[np.ndarray] = None
         self._ages: Optional[np.ndarray] = None  # Material ages (time since formation)
         self._initialized = False
+        self._gc_step_counter: int = 0
 
         logger.info("  Initialization complete.")
 
@@ -189,6 +193,7 @@ class SeafloorAgeTracker:
 
         self._current_age = starting_age
         self._initialized = True
+        self._gc_step_counter = 0
 
         logger.info(f"  Initialized with {len(self._lats)} tracers at {starting_age} Ma")
 
@@ -222,9 +227,8 @@ class SeafloorAgeTracker:
 
         # Filter out continental points if we have continental polygons
         if self._continental_cache is not None:
-            # Get continental mask
             continental_mask = self._continental_cache.get_continental_mask(
-                mesh_lats, mesh_lons, starting_age
+                mesh_lats, mesh_lons, self._snap_continental_time(starting_age)
             )
 
             # Filter to ocean points
@@ -316,6 +320,7 @@ class SeafloorAgeTracker:
         self._ages = cloud.get_property('age').copy()
         self._current_age = current_age
         self._initialized = True
+        self._gc_step_counter = 0
 
         logger.info(f"  Initialized with {len(self._lats)} tracers at {current_age} Ma")
 
@@ -404,6 +409,13 @@ class SeafloorAgeTracker:
             # Add new MOR seed points
             self._add_mor_seeds(next_time)
 
+            # Periodically force GC to reclaim pygplates C++ wrapper objects
+            # that may hold circular references and accumulate between steps.
+            self._gc_step_counter += 1
+            freq = self._config.gc_collect_frequency
+            if freq is not None and self._gc_step_counter % freq == 0:
+                gc.collect()
+
             time = next_time
 
         self._current_age = target_age
@@ -444,13 +456,32 @@ class SeafloorAgeTracker:
         self._lons = new_lons
         self._ages = self._ages[active_mask] + delta_time
 
+    def _snap_continental_time(self, time: float) -> int:
+        """Snap a geological time to the lower reconstruction interval boundary.
+
+        Returns an integer time (Ma) that is a multiple of
+        continental_reconstruction_interval, truncated toward present (0).
+        E.g. with interval=5: time=197.5 snaps to 195, time=3.0 snaps to 0.
+        Integer result matches pygplates' 1 Myr reconstruction resolution.
+        """
+        interval = self._config.continental_reconstruction_interval
+        return int(time / interval) * interval
+
     def _remove_continental_points(self, time: float):
-        """Remove points inside continental polygons."""
+        """Remove points inside continental polygons.
+
+        Continental polygons are reconstructed at a coarser interval
+        controlled by config.continental_reconstruction_interval. The query
+        time is snapped to the nearest integer multiple of that interval
+        (toward present) so that the same reconstruction is reused across
+        several timesteps. Integer snapping matches pygplates' internal
+        1 Myr resolution for reconstructions.
+        """
         if len(self._lats) == 0:
             return
 
         continental_mask = self._continental_cache.get_continental_mask(
-            self._lats, self._lons, time
+            self._lats, self._lons, self._snap_continental_time(time)
         )
 
         if continental_mask.any():

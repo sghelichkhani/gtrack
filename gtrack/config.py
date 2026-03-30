@@ -1,6 +1,7 @@
 """Configuration classes for gtrack package."""
 
 from dataclasses import dataclass
+from typing import Optional
 import numpy as np
 
 
@@ -49,18 +50,21 @@ class TracerConfig:
 
     Continental Handling
     --------------------
-    continental_cache_size : int
-        Number of timesteps to cache for continental polygon queries.
+    continental_reconstruction_interval : int
+        Interval in Myr between continental polygon reconstructions.
+        Continental polygons are reconstructed once per interval and reused
+        for all timesteps within that interval. E.g. interval=5 means
+        polygons are reconstructed at 200, 195, 190, ... Ma.
         Default: 5
 
     Reinitialization
     ----------------
     reinit_k_neighbors : int
         Number of nearest neighbors for interpolation during reinitialization.
-        Default: 5
+        Default: 6
     reinit_max_distance : float
         Maximum distance (meters) for valid interpolation neighbors.
-        Default: 500e3 (500 km)
+        Default: None (pi * earth_radius, i.e. half the circumference)
 
     Examples
     --------
@@ -92,12 +96,15 @@ class TracerConfig:
     ridge_sampling_degrees: float = 0.5  # ~50 km at equator
     spreading_offset_degrees: float = 0.01  # ~1 km offset from ridge
 
-    # Continental polygon caching
-    continental_cache_size: int = 5
+    # Continental polygon reconstruction
+    continental_reconstruction_interval: int = 5  # Myr between reconstructions
 
     # Reinitialization parameters
-    reinit_k_neighbors: int = 5
-    reinit_max_distance: float = 500e3  # meters
+    reinit_k_neighbors: int = 6
+    reinit_max_distance: Optional[float] = None  # defaults to pi * earth_radius in __post_init__
+
+    # Garbage collection
+    gc_collect_frequency: Optional[int] = 10  # call gc.collect() every N internal steps; None disables
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -135,20 +142,27 @@ class TracerConfig:
                 f"spreading_offset_degrees must be positive, "
                 f"got {self.spreading_offset_degrees}"
             )
-        if self.continental_cache_size < 0:
+        if self.continental_reconstruction_interval < 1:
             raise ValueError(
-                f"continental_cache_size must be non-negative, "
-                f"got {self.continental_cache_size}"
+                f"continental_reconstruction_interval must be at least 1, "
+                f"got {self.continental_reconstruction_interval}"
             )
         if self.reinit_k_neighbors < 1:
             raise ValueError(
                 f"reinit_k_neighbors must be at least 1, "
                 f"got {self.reinit_k_neighbors}"
             )
+        if self.reinit_max_distance is None:
+            self.reinit_max_distance = np.pi * self.earth_radius
         if self.reinit_max_distance <= 0:
             raise ValueError(
                 f"reinit_max_distance must be positive, "
                 f"got {self.reinit_max_distance}"
+            )
+        if self.gc_collect_frequency is not None and self.gc_collect_frequency < 1:
+            raise ValueError(
+                f"gc_collect_frequency must be >= 1 or None, "
+                f"got {self.gc_collect_frequency}"
             )
 
     @property
@@ -179,9 +193,10 @@ class TracerConfig:
             'initial_ocean_mean_spreading_rate': self.initial_ocean_mean_spreading_rate,
             'ridge_sampling_degrees': self.ridge_sampling_degrees,
             'spreading_offset_degrees': self.spreading_offset_degrees,
-            'continental_cache_size': self.continental_cache_size,
+            'continental_reconstruction_interval': self.continental_reconstruction_interval,
             'reinit_k_neighbors': self.reinit_k_neighbors,
             'reinit_max_distance': self.reinit_max_distance,
+            'gc_collect_frequency': self.gc_collect_frequency,
         }
 
     @classmethod
