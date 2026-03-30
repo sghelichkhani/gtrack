@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=65", "wheel"]
+requires = ["setuptools>=65", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gtrack"
-version = "0.3.3"
+dynamic = ["version"]
 description = "GPlates-based Tracking of Lithosphere and Kinematics"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -66,6 +66,9 @@ Repository = "https://github.com/sghelichkhani/gtrack"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["gtrack*"]
+
+[tool.setuptools_scm]
+version_scheme = "no-guess-dev"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -46,7 +46,11 @@ Example
 ...     cloud = tracker.step_to(age)
 """
 
-__version__ = "0.3.1"
+try:
+    from importlib.metadata import version as _get_version
+    __version__ = _get_version("gtrack")
+except Exception:
+    __version__ = "unknown"
 
 # Logging configuration (import first to configure before other modules)
 from .logging import (

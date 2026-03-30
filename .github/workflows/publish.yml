@@ -1,8 +1,9 @@
 name: Publish to PyPI
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
   # Allow manual trigger for testing
   workflow_dispatch:
@@ -15,6 +16,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for setuptools-scm
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,12 +38,26 @@ jobs:
           name: python-package-distributions
           path: dist/
 
+  create-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --generate-notes
+
   publish-to-pypi:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
-    # Only publish on release (not manual trigger)
-    if: github.event_name == 'release'
+    if: startsWith(github.ref, 'refs/tags/v')
 
     environment:
       name: pypi
