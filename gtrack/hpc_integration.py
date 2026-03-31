@@ -104,14 +104,14 @@ class SeafloorAgeTracker:
             self._topology_features, self._rotation_model
         )
 
-        # Set up continental polygon cache.  During forward time-stepping at
-        # most 2 distinct snapped times are ever active (current interval
-        # boundary and the next), so a small cache suffices.
+        # Set up continental polygon cache.  During forward time-stepping we
+        # reconstruct polygons at the exact time each step, so a small cache
+        # of recent reconstructions avoids redundant pygplates calls.
         if continental_polygons is not None:
             self._continental_cache = ContinentalPolygonCache(
                 continental_polygons,
                 self._rotation_model,
-                max_cache_size=2,
+                max_cache_size=5,
             )
         else:
             self._continental_cache = None
@@ -228,7 +228,7 @@ class SeafloorAgeTracker:
         # Filter out continental points if we have continental polygons
         if self._continental_cache is not None:
             continental_mask = self._continental_cache.get_continental_mask(
-                mesh_lats, mesh_lons, self._snap_continental_time(starting_age)
+                mesh_lats, mesh_lons, starting_age
             )
 
             # Filter to ocean points
@@ -380,8 +380,15 @@ class SeafloorAgeTracker:
                 zip(self._lats, self._lons)
             )
 
-            # Reconstruct using C++ backend
-            # Note: reconstruct_geometry needs integral time values
+            # Reconstruct using C++ backend.
+            # Note: TopologicalModel.reconstruct_geometry requires that
+            # (oldest_time - youngest_time) is an integer multiple of
+            # time_increment.  With time_step=1.0 and integer geological
+            # ages this is always satisfied.  The int() casts ensure this
+            # constraint holds even if times have float rounding noise.
+            # This is separate from the continental polygon reconstruction
+            # which uses pygplates.reconstruct() and supports arbitrary
+            # float times.
             reconstructed_time_span = self._topological_model.reconstruct_geometry(
                 points,
                 initial_time=int(time),
@@ -456,32 +463,19 @@ class SeafloorAgeTracker:
         self._lons = new_lons
         self._ages = self._ages[active_mask] + delta_time
 
-    def _snap_continental_time(self, time: float) -> int:
-        """Snap a geological time to the lower reconstruction interval boundary.
-
-        Returns an integer time (Ma) that is a multiple of
-        continental_reconstruction_interval, truncated toward present (0).
-        E.g. with interval=5: time=197.5 snaps to 195, time=3.0 snaps to 0.
-        Integer result matches pygplates' 1 Myr reconstruction resolution.
-        """
-        interval = self._config.continental_reconstruction_interval
-        return int(time / interval) * interval
-
     def _remove_continental_points(self, time: float):
         """Remove points inside continental polygons.
 
-        Continental polygons are reconstructed at a coarser interval
-        controlled by config.continental_reconstruction_interval. The query
-        time is snapped to the nearest integer multiple of that interval
-        (toward present) so that the same reconstruction is reused across
-        several timesteps. Integer snapping matches pygplates' internal
-        1 Myr resolution for reconstructions.
+        Continental polygons are reconstructed at the exact requested time
+        using pygplates' full float-precision interpolation (SLERP between
+        rotation pole samples). The ContinentalPolygonCache handles LRU
+        caching to avoid redundant pygplates.reconstruct() calls.
         """
         if len(self._lats) == 0:
             return
 
         continental_mask = self._continental_cache.get_continental_mask(
-            self._lats, self._lons, self._snap_continental_time(time)
+            self._lats, self._lons, time
         )
 
         if continental_mask.any():

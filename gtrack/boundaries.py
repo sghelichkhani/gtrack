@@ -197,7 +197,7 @@ class ContinentalPolygonCache:
         """
         polygons = self.get_polygons(time)
 
-        if len(polygons) == 0:
+        if len(polygons) == 0 or len(lats) == 0:
             return np.zeros(len(lats), dtype=bool)
 
         # Create all points in single C++ call using MultiPointOnSphere

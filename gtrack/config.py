@@ -1,5 +1,6 @@
 """Configuration classes for gtrack package."""
 
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 import numpy as np
@@ -51,11 +52,12 @@ class TracerConfig:
     Continental Handling
     --------------------
     continental_reconstruction_interval : int
-        Interval in Myr between continental polygon reconstructions.
-        Continental polygons are reconstructed once per interval and reused
-        for all timesteps within that interval. E.g. interval=5 means
-        polygons are reconstructed at 200, 195, 190, ... Ma.
-        Default: 5
+        Deprecated. Previously controlled temporal snapping of continental
+        polygon reconstructions. Continental polygons are now reconstructed
+        at the exact requested time using pygplates' full float-precision
+        interpolation. This parameter is retained for backward compatibility
+        but is no longer used. Setting it to any value other than 1 will
+        emit a deprecation warning.
 
     Reinitialization
     ----------------
@@ -96,8 +98,8 @@ class TracerConfig:
     ridge_sampling_degrees: float = 0.5  # ~50 km at equator
     spreading_offset_degrees: float = 0.01  # ~1 km offset from ridge
 
-    # Continental polygon reconstruction
-    continental_reconstruction_interval: int = 5  # Myr between reconstructions
+    # Continental polygon reconstruction (deprecated — no longer used)
+    continental_reconstruction_interval: int = 1
 
     # Reinitialization parameters
     reinit_k_neighbors: int = 6
@@ -146,6 +148,14 @@ class TracerConfig:
             raise ValueError(
                 f"continental_reconstruction_interval must be at least 1, "
                 f"got {self.continental_reconstruction_interval}"
+            )
+        if self.continental_reconstruction_interval != 1:
+            warnings.warn(
+                "continental_reconstruction_interval is deprecated and no longer "
+                "used. Continental polygons are now reconstructed at the exact "
+                "requested time. This parameter will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=3,
             )
         if self.reinit_k_neighbors < 1:
             raise ValueError(
@@ -214,4 +224,15 @@ class TracerConfig:
         TracerConfig
             Configuration object
         """
-        return cls(**config_dict)
+        d = dict(config_dict)
+        cri = d.get('continental_reconstruction_interval', 1)
+        if cri != 1:
+            import logging
+            logging.getLogger('gtrack.config').warning(
+                "Loaded config has continental_reconstruction_interval=%d. "
+                "This parameter is deprecated and no longer used; continental "
+                "polygons are now reconstructed at exact float times. "
+                "The value will be reset to 1.", cri
+            )
+            d['continental_reconstruction_interval'] = 1
+        return cls(**d)

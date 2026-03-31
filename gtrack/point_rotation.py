@@ -676,7 +676,8 @@ class PointRotator:
         cloud: PointCloud,
         at_age: float,
         use_static_polygons: bool = True,
-        remove_undefined: bool = True
+        remove_undefined: bool = True,
+        partitioning_features: Optional["pygplates.FeatureCollection"] = None
     ) -> PointCloud:
         """
         Assign plate IDs to points based on their positions.
@@ -690,11 +691,18 @@ class PointRotator:
             Use 0.0 for present-day positions.
         use_static_polygons : bool, default=True
             If True and static_polygons are loaded, use them for assignment.
-            Otherwise use topology_features.
+            Otherwise use topology_features. Ignored if partitioning_features
+            is provided.
         remove_undefined : bool, default=True
             If True, remove points with undefined plate IDs (plate_id=0)
             and emit a warning.
             If False, keep points with plate_id=0.
+        partitioning_features : pygplates.FeatureCollection, optional
+            Explicit polygon features to use for plate ID assignment.
+            When provided, overrides use_static_polygons. Use this to
+            assign plate IDs from the same polygon set used for containment
+            filtering (e.g., continental polygons), ensuring that rotated
+            points stay aligned with the polygon boundaries.
 
         Returns
         -------
@@ -707,12 +715,17 @@ class PointRotator:
         UserWarning
             If any points have undefined plate IDs.
         """
-        # Select partitioning features
-        partitioning_features = (
-            self.static_polygons
-            if (use_static_polygons and self.static_polygons is not None)
-            else self.topology_features
-        )
+        # Validate explicit partitioning features
+        if partitioning_features is not None:
+            if not isinstance(partitioning_features, pygplates.FeatureCollection):
+                raise TypeError(
+                    f"partitioning_features must be a pygplates.FeatureCollection, "
+                    f"got {type(partitioning_features).__name__}"
+                )
+        elif use_static_polygons and self.static_polygons is not None:
+            partitioning_features = self.static_polygons
+        else:
+            partitioning_features = self.topology_features
 
         plate_ids = _get_plate_ids(
             cloud.xyz,

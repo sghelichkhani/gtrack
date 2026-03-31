@@ -48,6 +48,7 @@ class PolygonFilter:
     ):
         import pygplates
         from .geometry import ensure_list
+        from .boundaries import ContinentalPolygonCache
 
         # Handle single file or Path as list
         polygon_files = ensure_list(polygon_files)
@@ -61,6 +62,12 @@ class PolygonFilter:
             features = pygplates.FeatureCollection(file)
             self.polygon_features.add(features)
 
+        # Use the same containment test as ContinentalPolygonCache to ensure
+        # consistent results between ocean excision and continental filtering.
+        self._continental_cache = ContinentalPolygonCache(
+            self.polygon_features, self.rotation_model
+        )
+
     def get_containment_mask(
         self,
         cloud: "PointCloud",
@@ -68,6 +75,10 @@ class PolygonFilter:
     ) -> np.ndarray:
         """
         Get boolean mask of points inside polygons.
+
+        Uses the same reconstruct-then-test approach as
+        ContinentalPolygonCache.get_continental_mask to ensure consistent
+        containment results across gtrack.
 
         Parameters
         ----------
@@ -82,34 +93,10 @@ class PolygonFilter:
         np.ndarray
             Boolean mask, shape (N,), True for points inside polygons.
         """
-        import pygplates
         from .geometry import XYZ2LatLon
 
-        # Convert to lat/lon for pygplates
         lats, lons = XYZ2LatLon(cloud.xyz)
-
-        # Create partitioner at specified age
-        partitioner = pygplates.PlatePartitioner(
-            self.polygon_features,
-            self.rotation_model,
-            reconstruction_time=at_age,
-            sort_partitioning_plates=(
-                pygplates.SortPartitioningPlates
-                .by_partition_type_then_plate_area
-            )
-        )
-
-        # Check each point
-        # Note: pygplates doesn't have batch partition_point, so we loop
-        # This is still efficient because PlatePartitioner does internal spatial indexing
-        mask = np.zeros(cloud.n_points, dtype=bool)
-
-        for i in range(cloud.n_points):
-            point = pygplates.PointOnSphere(lats[i], lons[i])
-            # partition_point returns None if not inside any polygon
-            mask[i] = partitioner.partition_point(point) is not None
-
-        return mask
+        return self._continental_cache.get_continental_mask(lats, lons, at_age)
 
     def filter_inside(
         self,
@@ -137,10 +124,8 @@ class PolygonFilter:
         >>> continental = filter.filter_inside(cloud, at_age=0.0)
         """
         mask = self.get_containment_mask(cloud, at_age)
-        n_inside = np.sum(mask)
-        n_total = cloud.n_points
 
-        if n_inside == 0:
+        if not mask.any():
             warnings.warn(
                 f"No points found inside polygons at {at_age} Ma. "
                 f"Returning empty PointCloud.",
